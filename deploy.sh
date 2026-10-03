@@ -81,6 +81,11 @@ upsert_secret() {
   fi
 }
 
+has_secret_value() {
+  local val="${1:-}"
+  [[ -n "$val" && "$val" != *"CHANGE_ME"* ]]
+}
+
 create_secrets() {
   info "Uploading secrets to Secrets Manager..."
   # db-password must be JSON (RDS Credentials requirement)
@@ -88,6 +93,21 @@ create_secrets() {
   upsert_secret "babalar/openai-api-key" "$OPENAI_API_KEY"
   upsert_secret "babalar/jwt-secret"     "$JWT_SECRET"
   upsert_secret "babalar/ingest-api-key" "$INGEST_API_KEY"
+  if has_secret_value "${LANGFUSE_PUBLIC_KEY:-}"; then
+    upsert_secret "babalar/langfuse-public-key" "$LANGFUSE_PUBLIC_KEY"
+  fi
+  if has_secret_value "${LANGFUSE_SECRET_KEY:-}"; then
+    upsert_secret "babalar/langfuse-secret-key" "$LANGFUSE_SECRET_KEY"
+  fi
+  if has_secret_value "${LANGFUSE_BASE_URL:-}"; then
+    upsert_secret "babalar/langfuse-base-url" "$LANGFUSE_BASE_URL"
+  fi
+  if has_secret_value "${TYPESAFE_API_KEY:-}"; then
+    upsert_secret "babalar/typesafe-api-key" "$TYPESAFE_API_KEY"
+  fi
+  if has_secret_value "${JEV_MODEL:-}"; then
+    upsert_secret "babalar/jev-model" "$JEV_MODEL"
+  fi
   success "Secrets ready."
 }
 

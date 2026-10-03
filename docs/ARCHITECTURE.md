@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Babalar** is a chatbot that indexes WhatsApp group conversations and answers questions via RAG (Retrieval-Augmented Generation). Messages are pulled nightly, stored in a vector database, and answered using GPT-4o-mini.
+**Babalar** is a chatbot that indexes WhatsApp group conversations and answers questions via RAG (Retrieval-Augmented Generation). Messages are pulled nightly, stored in a vector database, answered using GPT-4o-mini, and checked by a typed JEV decision layer before responses are shown.
 
 **Domain**: `babalar.ocloudy.com`  
 **Access**: Germany only (CloudFront geo-restriction)
@@ -30,6 +30,11 @@ Internet (Germany IP only)
           [RDS PostgreSQL 16]
           db.t4g.micro + pgvector
           (private subnet)
+
+Outbound from backend:
+  - OpenAI: embeddings, query preprocessing, answer generation, categorization
+  - TypeSafe JEV: typed answer/request decisions when configured
+  - Langfuse: optional traces for RAG, LLM calls, retrieval, and decisions
 ```
 
 **Traffic flow:**
@@ -44,7 +49,10 @@ Internet (Germany IP only)
 
 ### babalar-backend (Python 3.12 + FastAPI)
 - REST API: auth, chat, admin, ingest
-- RAG pipeline: question → embedding → pgvector similarity search → GPT-4o-mini answer
+- RAG pipeline: question guard → query preprocessing → embedding → pgvector similarity search → GPT-4o-mini answer → decision guard
+- JEV decision layer: optional TypeSafe System One check for grounding, out-of-scope, PII risk, and show/reject decisions
+- Regex PII fallback: blocks obvious private contact requests and private contact details even when JEV is not configured
+- Langfuse observability: OpenAI wrapper plus explicit spans for retrieval and decision steps
 - JWT-based auth + invite code registration
 - Rate limiting (PostgreSQL-backed, per-user + global daily limits)
 - Port: 8000
@@ -106,6 +114,11 @@ Internet (Germany IP only)
 | `babalar/openai-api-key` | OpenAI API key |
 | `babalar/jwt-secret` | JWT signing secret |
 | `babalar/ingest-api-key` | Internal ingestion key |
+| `babalar/langfuse-public-key` | Optional Langfuse public key |
+| `babalar/langfuse-secret-key` | Optional Langfuse secret key |
+| `babalar/langfuse-base-url` | Optional Langfuse host, defaults to EU cloud |
+| `babalar/typesafe-api-key` | Optional TypeSafe API key for JEV |
+| `babalar/jev-model` | Optional JEV model override, defaults to `jev-1.13.0` |
 
 ---
 
@@ -118,10 +131,11 @@ Internet (Germany IP only)
 | ALB | ~$18 |
 | CloudFront | Price Class 100 | ~$1-3 |
 | S3 | Static hosting | <$1 |
-| Secrets Manager | 4 secrets | ~$2 |
+| Secrets Manager | 4 required + optional observability/JEV secrets | ~$2-4 |
 | CloudWatch Logs | | ~$1 |
 | GPT-4o-mini | 5000 Q/day max | ~$10-20 |
 | OpenAI Embeddings | text-embedding-3-small | ~$2 |
+| TypeSafe JEV | Optional decision calls | Depends on usage/plan |
 | **Total** | | **~$65-75/mo** |
 
 ---
@@ -200,12 +214,62 @@ CREATE TABLE admin_config (
 ```
 User question
     → Rate limit check
-    → Embed question (text-embedding-3-small)
+    → decide-question
+        - regex guard blocks private-contact requests early
+    → GPT-4o-mini preprocess-query
+        - correct Turkish text
+        - resolve follow-up questions into standalone search_query
+    → Embed search_query (text-embedding-3-small)
     → pgvector cosine similarity search (top-K messages, default 10)
+    → Fetch nearby thread context around top matches
+    → Cluster and rank retrieved context
     → GPT-4o-mini: system prompt + context messages + user question
-    → Answer + source messages returned
+    → decide-answer
+        - regex PII guard always runs
+        - JEV checks answer_action, answer_grounded, out_of_scope, pii_risk when TYPESAFE_API_KEY is configured
+    → Safe answer + source messages returned, or safe fallback if blocked
     → Rate limit counter incremented
 ```
+
+### Decision Layer
+
+The decision layer lives in `babalar-backend/app/services/decision.py`.
+
+It has two checkpoints:
+
+1. `decide-question` runs before embeddings/retrieval. It blocks obvious private-contact requests such as asking for a named person's phone number, email, or address.
+2. `decide-answer` runs after GPT-4o-mini generates an answer. It blocks obvious PII via regex and, when TypeSafe is configured, asks JEV typed questions:
+   - `answer_action`: `show`, `show_with_caveat`, `reject`, or `needs_review`
+   - `answer_grounded`: probability that the answer is supported by retrieved context
+   - `out_of_scope`: probability that the request is outside the Babalar archive scope
+   - `pii_risk`: probability that the answer exposes personal data
+
+Configured thresholds:
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `JEV_PII_BLOCK_THRESHOLD` | `0.70` | Block if JEV sees high PII risk |
+| `JEV_OUT_OF_SCOPE_BLOCK_THRESHOLD` | `0.80` | Block if request is likely out of scope |
+| `JEV_GROUNDING_BLOCK_THRESHOLD` | `0.35` | Block if a found answer is poorly grounded |
+
+If TypeSafe/JEV is not configured, the service keeps working with `decision_source=disabled`; regex PII protections still run.
+
+### Observability
+
+Langfuse is optional. If `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set, the backend emits traces like:
+
+```
+rag-answer
+  ├─ decide-question
+  ├─ preprocess-query
+  ├─ embeddings.create
+  ├─ pgvector-search
+  ├─ generate-answer
+  └─ decide-answer
+       └─ TypeSafe System One / JEV call when configured
+```
+
+Trace output includes safe metadata such as `found`, `source_count`, `decision`, `decision_source`, risk scores, and context/answer lengths. Raw API keys and auth tokens are not traced.
 
 ---
 

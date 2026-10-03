@@ -49,3 +49,12 @@ INGEST_API_KEY=CHANGE_ME
 # PostgreSQL password
 # Generate: openssl rand -hex 16
 DB_PASSWORD=CHANGE_ME
+
+# Optional Langfuse tracing (leave blank to disable)
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+
+# Optional TypeSafe JEV decision layer (leave blank to disable JEV; regex PII guard still runs)
+TYPESAFE_API_KEY=
+JEV_MODEL=jev-1.13.0

@@ -95,12 +95,24 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com   # EU region (default); use https:
 
 Keys are found in the Langfuse UI → **Settings → API Keys**. Restart the backend after changing `.env`.
 
+**JEV decision layer (optional):**
+
+```bash
+TYPESAFE_API_KEY=sk-...
+JEV_ENABLED=true
+JEV_MODEL=jev-1.13.0
+```
+
+When configured, JEV runs after answer generation as a typed decision layer. It checks whether the answer is grounded in retrieved WhatsApp context, whether the request is out of scope, whether the answer contains PII, and whether the app should show or reject it. A lightweight regex PII guard runs even when JEV is not configured.
+
 **What gets traced**, per query:
 
 - `rag-answer` — root trace, tagged with `user_id` for per-user filtering
+  - `decide-question` — early request decision span (for example private-contact requests)
   - `preprocess-query` — GPT-4o-mini query rewrite/typo-fix generation
   - `pgvector-search` — vector similarity search span (query, top_k, result count)
   - `generate-answer` — final GPT-4o-mini answer generation
+  - `decide-answer` — JEV/PII decision span (action, risk scores, block reason)
 - `categorize-batch` — one trace per ingestion categorization run (message/chunk counts, category distribution)
 
 View traces at your Langfuse project URL (cloud.langfuse.com or self-hosted).

@@ -6,6 +6,8 @@ pgvector>=0.3
 alembic>=1.13
 openai>=1.50
 langfuse>=4,<5
+typesafe-sdk==0.7.2
+openinference-instrumentation-typesafe==0.1.4
 python-jose[cryptography]>=3.3
 bcrypt>=4.0
 python-multipart>=0.0.9

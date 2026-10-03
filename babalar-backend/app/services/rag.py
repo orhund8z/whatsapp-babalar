@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings  # noqa: F401  (sets LANGFUSE_TRACING_ENABLED before langfuse import)
 from app.models.models import AdminConfig
+from app.services.decision import decide_answer, decide_question
 from app.services.embedding import embed
 from langfuse import get_client, observe, propagate_attributes
 from langfuse.openai import AsyncOpenAI
@@ -152,6 +153,21 @@ async def answer(db: AsyncSession, question: str, history: list[dict] | None = N
 
     attrs = propagate_attributes(user_id=user_id, tags=["rag"]) if user_id else nullcontext()
     with attrs:
+        question_decision = await decide_question(question)
+        if question_decision.block:
+            langfuse.update_current_span(
+                output={
+                    "found": False,
+                    "source_count": 0,
+                    "decision": question_decision.reason,
+                    "decision_source": question_decision.source,
+                }
+            )
+            return {
+                "answer": question_decision.replacement_answer or "Bu konuda yardımcı olamam.",
+                "sources": [],
+            }
+
         normalized, search_query = await _preprocess(question, history)
 
         top_k = await _get_top_k(db)
@@ -262,7 +278,34 @@ async def answer(db: AsyncSession, question: str, history: list[dict] | None = N
                 # Model sometimes leaves "answer" blank when found=false instead of writing a message.
                 if not found or not answer_text:
                     answer_text = "Bu konuda toplulukta yeterli bilgi bulamadım."
-                langfuse.update_current_span(output={"found": found, "source_count": len(sources)})
+
+                decision = await decide_answer(
+                    question=normalized,
+                    search_query=search_query,
+                    answer=answer_text,
+                    context=context,
+                    found=found,
+                    source_count=len(sources),
+                )
+                if decision.block:
+                    langfuse.update_current_span(
+                        output={
+                            "found": False,
+                            "source_count": 0,
+                            "decision": decision.reason,
+                            "decision_source": decision.source,
+                        }
+                    )
+                    return {"answer": decision.replacement_answer or "Bu konuda toplulukta yeterli bilgi bulamadım.", "sources": []}
+
+                langfuse.update_current_span(
+                    output={
+                        "found": found,
+                        "source_count": len(sources),
+                        "decision": decision.action,
+                        "decision_source": decision.source,
+                    }
+                )
                 return {"answer": answer_text, "sources": sources if found else []}  # reasoning is internal, not returned
             except RateLimitError as e:
                 if "requests per day" in str(e) or "RPD" in str(e):

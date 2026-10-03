@@ -73,10 +73,19 @@ get_secret() {{
     --query SecretString --output text
 }}
 
+optional_secret() {{
+  get_secret "$1" 2>/dev/null || true
+}}
+
 DB_PASSWORD=$(get_secret babalar/db-password | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
 OPENAI_API_KEY=$(get_secret babalar/openai-api-key)
 JWT_SECRET=$(get_secret babalar/jwt-secret)
 INGEST_API_KEY=$(get_secret babalar/ingest-api-key)
+LANGFUSE_PUBLIC_KEY=$(optional_secret babalar/langfuse-public-key)
+LANGFUSE_SECRET_KEY=$(optional_secret babalar/langfuse-secret-key)
+LANGFUSE_BASE_URL=$(optional_secret babalar/langfuse-base-url)
+TYPESAFE_API_KEY=$(optional_secret babalar/typesafe-api-key)
+JEV_MODEL=$(optional_secret babalar/jev-model)
 
 cat > /app/.env << ENVEOF
 DATABASE_URL=postgresql+asyncpg://babalar:${{DB_PASSWORD}}@{db_endpoint}:5432/babalar
@@ -90,6 +99,22 @@ INGEST_CRON=0 2 * * *
 ENVIRONMENT=production
 LOG_LEVEL=INFO
 ENVEOF
+
+if [ -n "${{LANGFUSE_PUBLIC_KEY}}" ] && [ -n "${{LANGFUSE_SECRET_KEY}}" ]; then
+cat >> /app/.env << ENVEOF
+LANGFUSE_PUBLIC_KEY=${{LANGFUSE_PUBLIC_KEY}}
+LANGFUSE_SECRET_KEY=${{LANGFUSE_SECRET_KEY}}
+LANGFUSE_BASE_URL=${{LANGFUSE_BASE_URL:-https://cloud.langfuse.com}}
+ENVEOF
+fi
+
+if [ -n "${{TYPESAFE_API_KEY}}" ]; then
+cat >> /app/.env << ENVEOF
+TYPESAFE_API_KEY=${{TYPESAFE_API_KEY}}
+JEV_ENABLED=true
+JEV_MODEL=${{JEV_MODEL:-jev-1.13.0}}
+ENVEOF
+fi
 
 docker compose -f docker-compose.prod.yml up -d --build
 
