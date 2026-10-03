@@ -142,6 +142,23 @@ def _apply_thresholds(decision: AnswerDecision, found: bool) -> AnswerDecision:
     return decision
 
 
+def _record_decision_scores(decision: AnswerDecision) -> None:
+    langfuse = get_client()
+    try:
+        langfuse.score_current_span(name="pii_risk", value=decision.pii_risk, data_type="NUMERIC")
+        langfuse.score_current_span(name="out_of_scope", value=decision.out_of_scope, data_type="NUMERIC")
+        if decision.answer_grounded is not None:
+            langfuse.score_current_span(
+                name="answer_grounded",
+                value=decision.answer_grounded,
+                data_type="NUMERIC",
+            )
+        langfuse.score_current_span(name="answer_action", value=decision.action, data_type="CATEGORICAL")
+    except Exception:
+        # Scores are secondary telemetry. They must never affect the user path.
+        pass
+
+
 @observe(name="decide-question", capture_input=False, capture_output=False)
 async def decide_question(question: str) -> AnswerDecision:
     langfuse = get_client()
@@ -156,10 +173,12 @@ async def decide_question(question: str) -> AnswerDecision:
             pii_risk=1.0,
             source="regex",
         )
+        _record_decision_scores(decision)
         langfuse.update_current_span(output=asdict(decision))
         return decision
 
     decision = AnswerDecision(source="regex")
+    _record_decision_scores(decision)
     langfuse.update_current_span(output=asdict(decision))
     return decision
 
@@ -195,11 +214,13 @@ async def decide_answer(
             pii_risk=1.0,
             source="regex",
         )
+        _record_decision_scores(decision)
         langfuse.update_current_span(output=asdict(decision))
         return decision
 
     if not settings.jev_enabled or not settings.typesafe_api_key:
         decision = AnswerDecision(source="disabled")
+        _record_decision_scores(decision)
         langfuse.update_current_span(output=asdict(decision))
         return decision
 
@@ -207,6 +228,7 @@ async def decide_answer(
         from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul
     except Exception:
         decision = AnswerDecision(source="unavailable")
+        _record_decision_scores(decision)
         langfuse.update_current_span(output=asdict(decision))
         return decision
 
@@ -253,6 +275,7 @@ async def decide_answer(
             )
     except Exception as exc:
         decision = AnswerDecision(source="error")
+        _record_decision_scores(decision)
         langfuse.update_current_span(output={**asdict(decision), "error": exc.__class__.__name__})
         return decision
 
@@ -273,5 +296,6 @@ async def decide_answer(
         model=str(getattr(response, "model", settings.jev_model)),
     )
     decision = _apply_thresholds(decision, found=found)
+    _record_decision_scores(decision)
     langfuse.update_current_span(output=asdict(decision))
     return decision
