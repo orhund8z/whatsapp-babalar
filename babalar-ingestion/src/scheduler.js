@@ -1,9 +1,8 @@
 const { streamGroupMessages } = require("./whatsapp");
 const { discoverGroups, getActiveGroups, sendMessages, markGroupChecked, getIngestConfig, clearForceRun, setIngestionStatus, postLog, checkCancel } = require("./api-client");
+const { getChatsWithRetry } = require("./chat-loader");
 
 const BATCH_SIZE = 100;
-const GET_CHATS_TIMEOUT_MS = 900000;
-const GET_CHATS_MAX_ATTEMPTS = 6;
 
 function formatError(err) {
   if (!err) return "Unknown error";
@@ -14,35 +13,6 @@ function formatError(err) {
   } catch (_) {
     return String(err);
   }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function getChatsWithRetry(client, logWarn) {
-  let lastError;
-  for (let attempt = 1; attempt <= GET_CHATS_MAX_ATTEMPTS; attempt++) {
-    try {
-      const chats = await Promise.race([
-        client.getChats(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("getChats timeout after 15 minutes")), GET_CHATS_TIMEOUT_MS)),
-      ]);
-      if (Array.isArray(chats) && chats.length > 0) {
-        return chats;
-      }
-      lastError = new Error(`getChats returned ${Array.isArray(chats) ? chats.length : "non-array"} chats`);
-    } catch (err) {
-      lastError = err;
-    }
-
-    if (attempt < GET_CHATS_MAX_ATTEMPTS) {
-      const waitMs = attempt * 15000;
-      logWarn(`[scheduler] getChats attempt ${attempt}/${GET_CHATS_MAX_ATTEMPTS} failed; retrying in ${waitMs / 1000}s:\n${formatError(lastError)}`);
-      await sleep(waitMs);
-    }
-  }
-  throw lastError;
 }
 
 async function runIngestion(client, targetGroupId = null) {
