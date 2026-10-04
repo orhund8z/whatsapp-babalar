@@ -11,30 +11,24 @@
 
 ## System Architecture
 
-```
-Internet (Germany IP only)
-         │
-         ▼
-   [CloudFront]  ← geo-restriction: DE, SSL termination, DDoS protection
-   /           \
-  / (default)   \ (/api/*)
-[S3]          [ALB]  ← HTTP only, accepts traffic from CloudFront IPs only
-(frontend)      │
-                ▼
-          [EC2 t4g.small]
-          ┌────┴──────────────────┐
-          │  babalar-backend      │  FastAPI :8000
-          │  babalar-ingestion    │  Node.js, cron 02:00 UTC
-          └───────────────────────┘
-                │
-          [RDS PostgreSQL 16]
-          db.t4g.micro + pgvector
-          (private subnet)
+```mermaid
+flowchart TB
+    Internet[Internet<br/>Germany IP only] --> CF[CloudFront<br/>TLS + DE geo-restriction]
+    CF -->|default /*| S3[S3 frontend bucket<br/>React static app]
+    CF -->|/api/*| ALB[Application Load Balancer<br/>HTTP origin]
+    ALB --> EC2[EC2 t4g.small<br/>Docker Compose]
 
-Outbound from backend:
-  - OpenAI: embeddings, query preprocessing, answer generation, categorization
-  - TypeSafe JEV: typed answer/request decisions when configured
-  - Langfuse: optional traces for RAG, LLM calls, retrieval, and decisions
+    subgraph EC2Box[EC2 services]
+        BE[babalar-backend<br/>FastAPI :8000]
+        ING[babalar-ingestion<br/>Node.js + whatsapp-web.js]
+    end
+
+    EC2 --> EC2Box
+    ING -->|/api/ingest/*| BE
+    BE --> RDS[(RDS PostgreSQL 16<br/>pgvector HNSW)]
+    BE --> OAI[OpenAI<br/>GPT-4o-mini + text-embedding-3-small]
+    BE --> TS[TypeSafe JEV<br/>typed decisions]
+    BE --> LF[Langfuse<br/>traces + scores]
 ```
 
 **Traffic flow:**
@@ -42,6 +36,8 @@ Outbound from backend:
 - `POST /api/chat/ask` → CloudFront → ALB → EC2 (not cached, all headers forwarded)
 - ALB has no public HTTPS — CloudFront terminates SSL, ALB runs HTTP only
 - ALB security group only allows traffic from the CloudFront managed prefix list
+
+**Current production endpoint:** `https://babalar.ocloudy.com/api/health` returns `{"status":"ok","version":"20261004.3373b40"}`.
 
 ---
 
@@ -211,25 +207,35 @@ CREATE TABLE admin_config (
 
 ## RAG Pipeline
 
+```mermaid
+flowchart TD
+    Q[User question] --> RL[Rate limit check]
+    RL --> DQ[decide-question<br/>regex private-contact guard]
+    DQ -->|blocked| FB1[Safe fallback<br/>no retrieval or LLM answer]
+    DQ -->|allowed| PRE[GPT-4o-mini<br/>preprocess-query]
+    PRE --> EMB[text-embedding-3-small<br/>embed search_query]
+    EMB --> SEARCH[pgvector search<br/>top-K similarity]
+    SEARCH --> THREAD[Fetch nearby thread context]
+    THREAD --> CLUSTER[Cluster + rank context]
+    CLUSTER --> GEN[GPT-4o-mini<br/>generate-answer]
+    GEN --> DA[decide-answer<br/>regex PII + optional JEV]
+    DA -->|reject / needs_review| FB2[Safe fallback<br/>sources hidden]
+    DA -->|show / caveat| RESP[Answer + source groups]
+    RESP --> INC[Increment usage counters]
 ```
-User question
-    → Rate limit check
-    → decide-question
-        - regex guard blocks private-contact requests early
-    → GPT-4o-mini preprocess-query
-        - correct Turkish text
-        - resolve follow-up questions into standalone search_query
-    → Embed search_query (text-embedding-3-small)
-    → pgvector cosine similarity search (top-K messages, default 10)
-    → Fetch nearby thread context around top matches
-    → Cluster and rank retrieved context
-    → GPT-4o-mini: system prompt + context messages + user question
-    → decide-answer
-        - regex PII guard always runs
-        - JEV checks answer_action, answer_grounded, out_of_scope, pii_risk when TYPESAFE_API_KEY is configured
-    → Safe answer + source messages returned, or safe fallback if blocked
-    → Rate limit counter incremented
-```
+
+Detailed order:
+
+1. Rate limit check.
+2. `decide-question` blocks obvious private-contact requests early.
+3. GPT-4o-mini corrects Turkish text and resolves follow-up questions into `search_query`.
+4. `text-embedding-3-small` embeds the `search_query`.
+5. pgvector returns top-K similar messages.
+6. Nearby messages are fetched to reconstruct short WhatsApp threads.
+7. GPT-4o-mini generates a grounded Turkish answer from retrieved context.
+8. `decide-answer` runs regex PII checks and optional JEV checks.
+9. The backend returns a safe answer, or a safe fallback if blocked.
+10. Usage counters are incremented by the API layer.
 
 ### Decision Layer
 
@@ -258,18 +264,29 @@ If TypeSafe/JEV is not configured, the service keeps working with `decision_sour
 
 Langfuse is optional. If `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set, the backend emits traces like:
 
-```
-rag-answer
-  ├─ decide-question
-  ├─ preprocess-query
-  ├─ embeddings.create
-  ├─ pgvector-search
-  ├─ generate-answer
-  └─ decide-answer
-       └─ TypeSafe System One / JEV call when configured
+```mermaid
+flowchart TD
+    Trace[rag-answer trace] --> QSpan[decide-question]
+    Trace --> Pre[preprocess-query<br/>OpenAI generation]
+    Trace --> Emb[embeddings.create<br/>OpenAI embedding]
+    Trace --> Search[pgvector-search]
+    Trace --> Gen[generate-answer<br/>OpenAI generation]
+    Trace --> ASpan[decide-answer]
+    ASpan --> JEV[JEV System One<br/>when TYPESAFE_API_KEY is set]
+    QSpan --> Scores1[Langfuse scores<br/>pii_risk, out_of_scope, answer_action]
+    ASpan --> Scores2[Langfuse scores<br/>answer_grounded, pii_risk,<br/>out_of_scope, answer_action]
 ```
 
 Trace output includes safe metadata such as `found`, `source_count`, `decision`, `decision_source`, risk scores, and context/answer lengths. Raw API keys and auth tokens are not traced.
+
+Configured Langfuse score schemas:
+
+| Score | Type | Range/Categories |
+|-------|------|------------------|
+| `answer_grounded` | numeric | `0` to `1` |
+| `pii_risk` | numeric | `0` to `1` |
+| `out_of_scope` | numeric | `0` to `1` |
+| `answer_action` | categorical | `show`, `show_with_caveat`, `reject`, `needs_review` |
 
 ---
 

@@ -7,6 +7,7 @@ import { useThemeStore } from "../store/theme";
 export default function LoginPage() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const { setTokens, setUser } = useAuthStore();
@@ -55,13 +56,38 @@ export default function LoginPage() {
               required
               autoComplete="username"
             />
-            <input
-              type="password" placeholder="Şifre" value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 placeholder-gray-400 dark:placeholder-gray-500"
-              required
-              autoComplete="current-password"
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                placeholder="Şifre"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl px-4 py-2.5 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 placeholder-gray-400 dark:placeholder-gray-500"
+                required
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((value) => !value)}
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                aria-label={showPassword ? "Şifreyi gizle" : "Şifreyi göster"}
+                title={showPassword ? "Şifreyi gizle" : "Şifreyi göster"}
+              >
+                {showPassword ? (
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <path d="M10.6 10.6A2 2 0 0 0 13.4 13.4" />
+                    <path d="M16.8 16.8A11.7 11.7 0 0 1 12 18c-5 0-8.5-4-10-6a18.2 18.2 0 0 1 4-4.2" />
+                    <path d="M9.9 4.2A10.5 10.5 0 0 1 12 4c5 0 8.5 4 10 6a18 18 0 0 1-2.5 3.1" />
+                    <path d="M3 3l18 18" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                )}
+              </button>
+            </div>
             {error && (
               <p className="text-red-500 text-sm bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg">{error}</p>
             )}

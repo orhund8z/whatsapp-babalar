@@ -4,18 +4,61 @@ A RAG-based chatbot that indexes WhatsApp group conversations, stores them in a 
 
 ## Architecture
 
-```
-[React Frontend] ──→ [FastAPI Backend :8000] ──→ [PostgreSQL + pgvector]
-                                                          ↑
-                      [Node.js Ingestion] ────────────────┘
+```mermaid
+flowchart LR
+    U[User] --> CF[CloudFront<br/>babalar.ocloudy.com]
+    CF -->|Static app| S3[S3<br/>React frontend]
+    CF -->|/api/*| ALB[ALB]
+    ALB --> BE[FastAPI backend<br/>EC2 :8000]
+    ING[Node.js ingestion<br/>WhatsApp Web] --> BE
+    BE --> DB[(RDS PostgreSQL 16<br/>pgvector)]
+    BE --> OAI[OpenAI<br/>GPT-4o-mini + embeddings]
+    BE --> JEV[TypeSafe JEV<br/>decision layer]
+    BE --> LF[Langfuse<br/>traces + scores]
 ```
 
 - **Backend** — FastAPI, SQLAlchemy async, pgvector (1536-dim HNSW)
 - **Frontend** — React 18, TypeScript, Vite, Tailwind CSS, Zustand
 - **Ingestion** — Node.js, whatsapp-web.js, cron-based
-- **LLM** — GPT-4o-mini (Q&A, categorization) + text-embedding-3-small
+- **LLM** — GPT-4o-mini (Q&A, preprocessing, categorization) + text-embedding-3-small
+- **Decision Layer** — TypeSafe JEV for groundedness, PII, scope, and show/reject decisions
 - **Infra** — AWS (EC2, RDS PostgreSQL 16, CloudFront + S3), CDK (Python)
-- **Observability** — Langfuse (LLM tracing, optional)
+- **Observability** — Langfuse traces and scores (`answer_grounded`, `pii_risk`, `out_of_scope`, `answer_action`)
+
+### Live Production
+
+| Endpoint | Status |
+|----------|--------|
+| https://babalar.ocloudy.com | CloudFront + S3 frontend |
+| https://babalar.ocloudy.com/api/health | Backend health via CloudFront |
+| Current deployed backend version | `20261004.3373b40` |
+
+---
+
+## RAG + Decision Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as FastAPI /api/chat/ask
+    participant Guard as decide-question
+    participant LLM as GPT-4o-mini
+    participant Vec as pgvector
+    participant JEV as JEV / regex decision
+    participant LF as Langfuse
+
+    User->>API: Ask question
+    API->>Guard: private-contact / scope precheck
+    Guard-->>API: allow or reject
+    API->>LLM: preprocess-query
+    API->>Vec: embed + similarity search
+    Vec-->>API: top messages + thread context
+    API->>LLM: generate-answer
+    API->>JEV: decide-answer
+    JEV-->>API: show / caveat / reject + scores
+    API->>LF: trace spans + decision scores
+    API-->>User: safe answer or fallback
+```
 
 ---
 
@@ -114,6 +157,15 @@ When configured, JEV runs after answer generation as a typed decision layer. It 
   - `generate-answer` — final GPT-4o-mini answer generation
   - `decide-answer` — JEV/PII decision span (action, risk scores, block reason)
 - `categorize-batch` — one trace per ingestion categorization run (message/chunk counts, category distribution)
+
+**Langfuse score configs:**
+
+| Score | Type | Meaning |
+|-------|------|---------|
+| `answer_grounded` | numeric 0-1 | JEV confidence that answer is supported by retrieved WhatsApp context |
+| `pii_risk` | numeric 0-1 | JEV/guard probability that the answer exposes personal data |
+| `out_of_scope` | numeric 0-1 | JEV probability that the request is outside Babalar's scope |
+| `answer_action` | categorical | `show`, `show_with_caveat`, `reject`, or `needs_review` |
 
 View traces at your Langfuse project URL (cloud.langfuse.com or self-hosted).
 
