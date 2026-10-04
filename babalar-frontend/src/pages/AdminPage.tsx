@@ -403,14 +403,21 @@ export default function AdminPage() {
 
               {qrData?.data_url && (
                 <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-2xl p-4">
-                  <div className="flex items-start gap-4">
-                    <img src={qrData.data_url} alt="WhatsApp QR" className="w-36 h-36 rounded-xl border border-yellow-200 dark:border-yellow-700 flex-shrink-0" />
-                    <div>
+                  <div className="flex flex-col sm:flex-row items-start gap-4">
+                    <button
+                      type="button"
+                      onClick={() => window.open(qrData.data_url, "_blank", "noopener,noreferrer")}
+                      className="rounded-xl border border-yellow-200 dark:border-yellow-700 bg-white p-2 shadow-sm hover:shadow-md transition-shadow"
+                      title="QR kodu büyük aç"
+                    >
+                      <img src={qrData.data_url} alt="WhatsApp QR" className="w-56 h-56 sm:w-52 sm:h-52" />
+                    </button>
+                    <div className="min-w-0">
                       <p className="font-semibold text-yellow-800 dark:text-yellow-300">WhatsApp bağlantısı bekleniyor</p>
                       <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1.5 leading-relaxed">
                         WhatsApp'ı açın → Bağlı Cihazlar → Cihaz Ekle → QR kodu tarayın
                       </p>
-                      <p className="text-xs text-yellow-500 dark:text-yellow-600 mt-2.5 animate-pulse">QR her 20 saniyede yenilenir, sayfa otomatik güncellenir</p>
+                      <p className="text-xs text-yellow-500 dark:text-yellow-600 mt-2.5 animate-pulse">QR yenilenirse bu panel otomatik güncellenir. Büyütmek için QR'a tıklayın.</p>
                     </div>
                   </div>
                 </div>
