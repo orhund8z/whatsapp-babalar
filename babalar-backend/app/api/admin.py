@@ -208,12 +208,38 @@ async def trigger_fetch_all(db: AsyncSession = Depends(get_db), _: User = Depend
     return {"ok": True}
 
 
+class FetchSelectedGroups(BaseModel):
+    group_ids: list[str]
+
+
+@router.post("/groups/fetch-selected")
+async def trigger_fetch_selected(req: FetchSelectedGroups, db: AsyncSession = Depends(get_db), _: User = Depends(get_admin_user)):
+    import json
+    import uuid
+
+    ids = [uuid.UUID(gid) for gid in req.group_ids]
+    rows = await db.execute(select(WaGroup).where(WaGroup.id.in_(ids)))
+    groups = rows.scalars().all()
+    for group in groups:
+        group.is_active = True
+
+    wa_group_ids = [group.wa_group_id for group in groups]
+    row = await db.get(AdminConfig, "force_run_group_ids")
+    if row:
+        row.value = json.dumps(wa_group_ids)
+    else:
+        db.add(AdminConfig(key="force_run_group_ids", value=json.dumps(wa_group_ids)))
+    await db.commit()
+    return {"ok": True, "queued": len(wa_group_ids)}
+
+
 @router.post("/groups/{group_id}/fetch")
 async def trigger_fetch(group_id: str, db: AsyncSession = Depends(get_db), _: User = Depends(get_admin_user)):
     import uuid
     group = await db.get(WaGroup, uuid.UUID(group_id))
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+    group.is_active = True
     row = await db.get(AdminConfig, "force_run")
     if row:
         row.value = group.wa_group_id

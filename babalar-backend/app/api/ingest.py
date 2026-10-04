@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -143,6 +144,13 @@ async def check_trigger(db: AsyncSession = Depends(get_db), _: None = Depends(ve
         # "all" means fetch all active groups (same as cron), specific wa_group_id means per-group.
         group_id = None if force.value == "all" else force.value
         return {"should_run": True, "group_id": group_id}
+    force_group_ids = await db.get(AdminConfig, "force_run_group_ids")
+    if force_group_ids:
+        try:
+            group_ids = json.loads(force_group_ids.value)
+        except Exception:
+            group_ids = []
+        return {"should_run": True, "group_ids": group_ids}
     return {"should_run": False, "group_id": None}
 
 
@@ -173,6 +181,10 @@ async def clear_force_run(db: AsyncSession = Depends(get_db), _: None = Depends(
     force = await db.get(AdminConfig, "force_run")
     if force:
         await db.delete(force)
+    force_group_ids = await db.get(AdminConfig, "force_run_group_ids")
+    if force_group_ids:
+        await db.delete(force_group_ids)
+    if force or force_group_ids:
         await db.commit()
     return {"ok": True}
 

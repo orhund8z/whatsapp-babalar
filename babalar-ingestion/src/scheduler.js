@@ -15,7 +15,23 @@ function formatError(err) {
   }
 }
 
-async function runIngestion(client, targetGroupId = null) {
+async function getFullChatById(client, waGroupId, logWarn) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await client.getChatById(waGroupId);
+    } catch (err) {
+      lastError = err;
+      if (attempt < 3) {
+        logWarn(`[scheduler] getChatById attempt ${attempt}/3 failed for ${waGroupId}; retrying:\n${formatError(err)}`);
+        await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
+      }
+    }
+  }
+  throw lastError;
+}
+
+async function runIngestion(client, targetGroupIds = null) {
   // Record start time before cache load so mark-checked uses this timestamp,
   // not the end time. Messages arriving during a long run won't be permanently skipped.
   const runStartTime = new Date();
@@ -66,16 +82,20 @@ async function runIngestion(client, targetGroupId = null) {
     return;
   }
 
-  const groupsToProcess = targetGroupId
-    ? activeGroups.filter((g) => g.wa_group_id === targetGroupId)
+  const targetSet = Array.isArray(targetGroupIds)
+    ? new Set(targetGroupIds)
+    : targetGroupIds ? new Set([targetGroupIds]) : null;
+
+  const groupsToProcess = targetSet
+    ? activeGroups.filter((g) => targetSet.has(g.wa_group_id))
     : activeGroups;
 
   if (!groupsToProcess.length) {
-    console.log(`[scheduler] Target group ${targetGroupId} not found in active groups.`);
+    console.log(`[scheduler] Target group(s) ${targetSet ? [...targetSet].join(", ") : ""} not found in active groups.`);
     return;
   }
 
-  logInfo(`[scheduler] Processing ${groupsToProcess.length} group(s)${targetGroupId ? ` (targeted: ${targetGroupId})` : ""}.`);
+  logInfo(`[scheduler] Processing ${groupsToProcess.length} group(s)${targetSet ? " (targeted)" : ""}.`);
 
   const chatMap = {};
   for (const chat of groupChats) {
@@ -88,14 +108,19 @@ async function runIngestion(client, targetGroupId = null) {
       process.exit(0);
     }
 
-    const chat = chatMap[group.wa_group_id];
+    let chat = chatMap[group.wa_group_id];
     if (!chat) {
       logWarn(`[scheduler] "${group.group_name}" not found in WhatsApp, skipping.`);
       continue;
     }
     if (chat.__minimal) {
-      logWarn(`[scheduler] "${group.group_name}" discovered through minimal fallback; message ingestion skipped because WhatsApp getChats did not return a full chat object.`);
-      continue;
+      try {
+        logWarn(`[scheduler] "${group.group_name}" discovered through minimal fallback; loading full chat by id before message ingestion.`);
+        chat = await getFullChatById(client, group.wa_group_id, logWarn);
+      } catch (err) {
+        logWarn(`[scheduler] "${group.group_name}" full chat load failed; message ingestion skipped:\n${formatError(err)}`);
+        continue;
+      }
     }
 
     const since = group.last_ingested_at

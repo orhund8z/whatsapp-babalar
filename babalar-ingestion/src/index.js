@@ -24,15 +24,17 @@ async function main() {
 
   let isRunning = false;
 
-  async function safeRun(reason, targetGroupId = null) {
+  async function safeRun(reason, targetGroupIds = null) {
     if (isRunning) return;
     isRunning = true;
-    const label = targetGroupId ? `group:${targetGroupId}` : "all";
+    const label = Array.isArray(targetGroupIds)
+      ? `groups:${targetGroupIds.length}`
+      : targetGroupIds ? `group:${targetGroupIds}` : "all";
     const startMsg = `[babalar-ingestion] Ingestion started (${reason}, ${label})`;
     console.log(startMsg);
     postLog("INFO", startMsg).catch(() => {});
     try {
-      await runIngestion(client, targetGroupId);
+      await runIngestion(client, targetGroupIds);
     } catch (err) {
       const errMsg = `[babalar-ingestion] Ingestion error:\n${formatError(err)}`;
       console.error(errMsg);
@@ -64,8 +66,8 @@ async function main() {
 
     if (isRunning) return;
     try {
-      const { should_run, group_id } = await checkTrigger();
-      if (should_run) safeRun("trigger", group_id || null);
+      const { should_run, group_id, group_ids } = await checkTrigger();
+      if (should_run) safeRun("trigger", group_ids || group_id || null);
     } catch (_) {}
   }, POLL_INTERVAL_MS);
 

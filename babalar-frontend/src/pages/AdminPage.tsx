@@ -196,6 +196,7 @@ export default function AdminPage() {
 
   const totalPages = Math.ceil(filteredGroups.length / GROUP_PAGE_SIZE);
   const pagedGroups = filteredGroups.slice(groupPage * GROUP_PAGE_SIZE, (groupPage + 1) * GROUP_PAGE_SIZE);
+  const filteredGroupIds = filteredGroups.map((g: any) => g.id);
 
   const updateConfig = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) => api.put(`/admin/config/${key}`, { value }),
@@ -217,8 +218,13 @@ export default function AdminPage() {
     mutationFn: (id: string) => api.post(`/admin/groups/${id}/fetch`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-groups"] }),
   });
-  const fetchAll = useMutation({
-    mutationFn: () => api.post("/admin/groups/fetch-all"),
+  const fetchSelectedGroups = useMutation({
+    mutationFn: (ids: string[]) => api.post("/admin/groups/fetch-selected", { group_ids: ids }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-groups"] }),
+  });
+  const bulkSetGroupsActive = useMutation({
+    mutationFn: ({ ids, isActive }: { ids: string[]; isActive: boolean }) =>
+      api.post("/admin/groups/bulk-set-active", { group_ids: ids, is_active: isActive }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-groups"] }),
   });
   const deleteGroupMessages = useMutation({
@@ -438,11 +444,26 @@ export default function AdminPage() {
                   className="flex-1 min-w-40 border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 placeholder-gray-400"
                 />
                 <button
-                  onClick={() => fetchAll.mutate()}
-                  disabled={fetchAll.isPending}
+                  onClick={() => fetchSelectedGroups.mutate(filteredGroupIds)}
+                  disabled={fetchSelectedGroups.isPending || filteredGroupIds.length === 0}
                   className="px-3 py-2 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                  title="Ekrandaki filtreye uyan grupları aktif yapar ve sadece onları çekmek üzere sıraya alır"
                 >
-                  ↓ Hepsini Çek
+                  ↓ Görünenleri Çek ({filteredGroupIds.length})
+                </button>
+                <button
+                  onClick={() => bulkSetGroupsActive.mutate({ ids: filteredGroupIds, isActive: true })}
+                  disabled={bulkSetGroupsActive.isPending || filteredGroupIds.length === 0}
+                  className="px-3 py-2 rounded-xl text-sm font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-900/50 disabled:opacity-50 transition-colors"
+                >
+                  Aktif Yap
+                </button>
+                <button
+                  onClick={() => bulkSetGroupsActive.mutate({ ids: filteredGroupIds, isActive: false })}
+                  disabled={bulkSetGroupsActive.isPending || filteredGroupIds.length === 0}
+                  className="px-3 py-2 rounded-xl text-sm font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 transition-colors"
+                >
+                  Pasif Yap
                 </button>
               </div>
 
@@ -473,7 +494,7 @@ export default function AdminPage() {
                       <tr>
                         <td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-400">
                           {groups?.length === 0
-                            ? <>Henüz grup keşfedilmedi. <span className="text-blue-500 cursor-pointer" onClick={() => fetchAll.mutate()}>↓ Hepsini Çek</span> butonuna bas.</>
+                            ? <>Henüz grup keşfedilmedi. WhatsApp bağlıysa birkaç saniye sonra yenile.</>
                             : "Sonuç bulunamadı."}
                         </td>
                       </tr>
@@ -481,7 +502,7 @@ export default function AdminPage() {
                     {pagedGroups.map((g: any) => {
                       const status = ingestionStatus(g);
                       return (
-                        <tr key={g.id} className={`border-b border-gray-50 dark:border-gray-700/50 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors ${!g.is_active ? "opacity-50" : ""}`}>
+                        <tr key={g.id} className={`border-b border-gray-50 dark:border-gray-700/50 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors ${!g.is_active ? "bg-gray-50/60 dark:bg-gray-900/20" : ""}`}>
                           <td className="px-3 py-2.5 max-w-[180px]">
                             <p className="font-medium text-gray-800 dark:text-gray-200 truncate">{g.name}</p>
                           </td>
