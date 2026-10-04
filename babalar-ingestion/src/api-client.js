@@ -84,4 +84,16 @@ async function checkCancel() {
   }
 }
 
-module.exports = { discoverGroups, getActiveGroups, sendMessages, markGroupChecked, getIngestConfig, checkTrigger, clearForceRun, setIngestionStatus, setQR, clearQR, checkReconnect, setWhatsAppStatus, postLog, checkCancel };
+async function claimHistoryPage() {
+  return (await http.post("/api/ingest/history/claim", {}, { timeout: 10000 })).data;
+}
+
+async function completeHistoryPage(result) {
+  return (await http.post("/api/ingest/history/complete", result, { timeout: 10000 })).data;
+}
+
+async function recoverHistoryPages() {
+  await http.post("/api/ingest/history/recover", {}, { timeout: 10000 });
+}
+
+module.exports = { discoverGroups, getActiveGroups, sendMessages, markGroupChecked, getIngestConfig, checkTrigger, clearForceRun, setIngestionStatus, setQR, clearQR, checkReconnect, setWhatsAppStatus, postLog, checkCancel, claimHistoryPage, completeHistoryPage, recoverHistoryPages };

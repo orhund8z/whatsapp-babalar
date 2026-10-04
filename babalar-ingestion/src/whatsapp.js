@@ -3,6 +3,7 @@ const qrcode = require("qrcode-terminal");
 const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
+const { installChatCompatibility } = require("./whatsapp-compat");
 const { setQR, clearQR, setWhatsAppStatus, postLog } = require("./api-client");
 
 function formatError(err) {
@@ -86,7 +87,7 @@ async function initWhatsApp() {
   client.on("authenticated", async () => {
     logInfo("[whatsapp] Session authenticated.");
     try { await clearQR(); } catch (_) {}
-    try { await setWhatsAppStatus("connected"); } catch (_) {}
+    try { await setWhatsAppStatus("syncing"); } catch (_) {}
   });
 
   client.on("auth_failure", async (msg) => {
@@ -105,17 +106,64 @@ async function initWhatsApp() {
     }
   });
 
-  await new Promise((resolve) => {
-    client.on("ready", async () => {
-      logInfo("[whatsapp] Connected. Waiting for sync (60s)...");
-      // Disable page-level timeouts — getChats() on large accounts can take many minutes.
-      // We rely on our own application-level timeout in scheduler.js instead.
-      try { client.pupPage.setDefaultTimeout(0); } catch (_) {}
-      await new Promise((r) => setTimeout(r, 60000));
-      logInfo("[whatsapp] Ready.");
+  await new Promise((resolve, reject) => {
+    let authenticatedAt = null;
+    let readySeen = false;
+    let checking = false;
+    let settled = false;
+    const finish = async () => {
+      if (settled) return;
+      settled = true;
+      clearInterval(readinessPoll);
+      clearTimeout(startupTimeout);
+      try { await setWhatsAppStatus("connected"); } catch (_) {}
       resolve();
+    };
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(readinessPoll);
+      clearTimeout(startupTimeout);
+      reject(err);
+    };
+    const startupTimeout = setTimeout(() => {
+      setWhatsAppStatus("disconnected").catch(() => {});
+      fail(new Error("WhatsApp initialization timed out after 5 minutes"));
+    }, 300000);
+    client.once("authenticated", () => { authenticatedAt = Date.now(); });
+    const readinessPoll = setInterval(async () => {
+      if (checking || settled || !authenticatedAt || !client.pupPage) return;
+      checking = true;
+      try {
+        if (!await installChatCompatibility(client)) return;
+        if (!readySeen && Date.now() - authenticatedAt > 90000) {
+          const state = await client.getState();
+          if (state === "CONNECTED" && (await client.getChats()).length > 0) {
+            logWarn("[whatsapp] Ready event delayed; verified connected chat access. Resuming ingestion.");
+            await finish();
+          }
+        }
+      } catch (err) {
+        if (Date.now() - authenticatedAt > 90000) {
+          logWarn(`[whatsapp] Readiness check failed:\n${formatError(err)}`);
+        }
+      } finally {
+        checking = false;
+      }
+    }, 5000);
+    client.on("ready", async () => {
+      readySeen = true;
+      try {
+        await installChatCompatibility(client);
+        logInfo("[whatsapp] Connected. Waiting for sync (60s)...");
+        // The scheduler applies its own timeout to chat discovery.
+        try { client.pupPage.setDefaultTimeout(0); } catch (_) {}
+        await new Promise((r) => setTimeout(r, 60000));
+        logInfo("[whatsapp] Ready.");
+        await finish();
+      } catch (err) { fail(err); }
     });
-    client.initialize();
+    client.initialize().catch(fail);
   });
 
   return client;
@@ -159,7 +207,8 @@ async function* streamGroupMessages(chat, since, cancelFn) {
     const prevLen = all.length;
     all = batch;
 
-    console.log(`[whatsapp] "${chat.name}": loaded ${batch.length} (limit=${limit}), oldest=${new Date(oldestTs * 1000).toISOString().slice(0, 10)}`);
+    const oldestDate = batch.length ? new Date(oldestTs * 1000).toISOString().slice(0, 10) : "none";
+    console.log(`[whatsapp] "${chat.name}": loaded ${batch.length} (limit=${limit}), oldest=${oldestDate}`);
 
     // Stop if we've reached or passed the since date, or no new messages came in
     if (oldestTs <= sinceTs || batch.length === prevLen || batch.length < limit) break;

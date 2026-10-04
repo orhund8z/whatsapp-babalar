@@ -305,6 +305,45 @@ Nightly 02:00 UTC (node-cron)
     → Update wa_groups.last_ingested_at
 ```
 
+### Group History Pagination
+
+The group table opens a history side panel with a 250/500/1,000-message page selector,
+queue status, scanned/saved counts, and the next backward boundary. Each request
+fetches one page; it does not activate a passive group or change `last_ingested_at`.
+
+```mermaid
+sequenceDiagram
+    participant UI as Group History Panel
+    participant API as FastAPI
+    participant DB as PostgreSQL
+    participant ING as Ingestion Worker
+    participant WA as WhatsApp Web
+    UI->>API: POST /admin/groups/{id}/history
+    API->>DB: Queue per-group history request
+    ING->>API: Claim one queued request
+    API->>DB: Lock request and mark running
+    ING->>WA: Load messages before (timestamp, message ID)
+    WA-->>ING: One bounded page
+    ING->>API: Save eligible messages in batches of 100
+    API->>DB: Deduplicate, categorize, embed, commit
+    ING->>API: Complete page
+    API->>DB: Commit backward cursor and page counts
+    UI->>API: Poll group progress
+```
+
+Progress is stored in internal `admin_config` rows keyed by `group_history:{group_uuid}`.
+The queue uses row locks and request IDs to reject duplicate jobs and stale results.
+Equal timestamps are disambiguated by message ID; short/non-text messages still advance
+the scan cursor. A failure leaves the cursor unchanged, so partial inserts can be
+retried through the existing deduplication path. Startup recovery marks interrupted
+running requests as retryable errors. Manual history and filtered requests take
+priority over automatic initial scans; a running scan finishes before the next job.
+
+Each page bounds older-history loading to 40 calls and 90 seconds between calls,
+with a 120-second fetch timeout. These bounds do not indicate exhaustion. Only an
+empty older-history response, with no remaining page candidates, marks the history
+as exhausted. Further synchronization can be checked explicitly from the panel.
+
 ---
 
 ## API Reference
@@ -332,12 +371,17 @@ Nightly 02:00 UTC (node-cron)
 | GET | `/api/admin/users` | List users |
 | GET | `/api/admin/stats` | Usage stats |
 | GET | `/api/admin/groups` | WhatsApp groups |
+| POST | `/api/admin/groups/{id}/history` | Queue one older page; optional exhausted-history recheck |
+| POST | `/api/admin/groups/{id}/history/cancel` | Remove a queued page or stop the running history scan |
 
 ### Ingest (internal)
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/ingest/messages` | Batch insert messages |
 | GET/POST | `/api/ingest/groups` | Group registry |
+| POST | `/api/ingest/history/claim` | Claim one queued older page |
+| POST | `/api/ingest/history/complete` | Commit a successful backward cursor or retryable error |
+| POST | `/api/ingest/history/recover` | Recover interrupted history jobs on worker startup |
 
 ---
 

@@ -5,6 +5,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import api from "../api/client";
 import { useThemeStore } from "../store/theme";
 import { useAuthStore } from "../store/auth";
+import { History, LoaderCircle } from "lucide-react";
+import GroupHistoryPanel from "../components/GroupHistoryPanel";
 
 type Tab = "overview" | "groups" | "users" | "config" | "invites" | "logs";
 
@@ -143,6 +145,8 @@ export default function AdminPage() {
   const [sortKey, setSortKey] = useState<string>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [groupPage, setGroupPage] = useState(0);
+  const [historyGroupId, setHistoryGroupId] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const GROUP_PAGE_SIZE = 25;
   const { theme, toggle } = useThemeStore();
   const currentUser = useAuthStore((s) => s.user);
@@ -217,6 +221,17 @@ export default function AdminPage() {
   const fetchGroup = useMutation({
     mutationFn: (id: string) => api.post(`/admin/groups/${id}/fetch`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-groups"] }),
+  });
+  const fetchHistory = useMutation({
+    mutationFn: ({ id, size, recheck }: { id: string; size: number; recheck: boolean }) => api.post(`/admin/groups/${id}/history`, { page_size: size, recheck }),
+    onSuccess: () => { setHistoryError(null); qc.invalidateQueries({ queryKey: ["admin-groups"] }); },
+    onError: (err: any) => setHistoryError(err.response?.data?.detail || "Geçmiş taraması sıraya alınamadı."),
+  });
+  const historyGroup = groups?.find((g: any) => g.id === historyGroupId);
+  const cancelHistory = useMutation({
+    mutationFn: (id: string) => api.post(`/admin/groups/${id}/history/cancel`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-groups"] }),
+    onError: (err: any) => setHistoryError(err.response?.data?.detail || "Geçmiş taraması durdurulamadı."),
   });
   const fetchSelectedGroups = useMutation({
     mutationFn: (ids: string[]) => api.post("/admin/groups/fetch-selected", { group_ids: ids }),
@@ -389,6 +404,7 @@ export default function AdminPage() {
                     const status = qrData?.data_url ? "waiting_qr" : (waStatus?.status ?? "unknown");
                     const badge: Record<string, { dot: string; label: string; cls: string }> = {
                       connected:   { dot: "🟢", label: "Bağlı",          cls: "text-green-600 dark:text-green-400" },
+                      syncing:     { dot: "🟡", label: "Senkronize Ediliyor", cls: "text-yellow-600 dark:text-yellow-400" },
                       waiting_qr:  { dot: "🟡", label: "QR Bekleniyor",  cls: "text-yellow-600 dark:text-yellow-400" },
                       disconnected:{ dot: "🔴", label: "Bağlantı Kesik", cls: "text-red-500 dark:text-red-400" },
                       auth_failure:{ dot: "🔴", label: "Auth Hatası",    cls: "text-red-500 dark:text-red-400" },
@@ -467,8 +483,8 @@ export default function AdminPage() {
                 </button>
               </div>
 
-              <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 overflow-x-auto">
+                <table className="w-full min-w-[640px] text-sm">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-100 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                       {[
@@ -504,7 +520,11 @@ export default function AdminPage() {
                       return (
                         <tr key={g.id} className={`border-b border-gray-50 dark:border-gray-700/50 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors ${!g.is_active ? "bg-gray-50/60 dark:bg-gray-900/20" : ""}`}>
                           <td className="px-3 py-2.5 max-w-[180px]">
-                            <p className="font-medium text-gray-800 dark:text-gray-200 truncate">{g.name}</p>
+                            <p title={g.name} className="font-medium text-gray-800 dark:text-gray-200 truncate">{g.name}</p>
+                            {g.history && <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                              {(g.history.status === "queued" || g.history.status === "running") && <LoaderCircle size={12} className="animate-spin shrink-0" />}
+                              {g.history.status === "queued" ? "Geçmiş taraması sırada" : g.history.status === "running" ? "Geçmiş taranıyor" : g.history.status === "error" ? "Geçmiş taramasında hata" : g.history.exhausted ? "Geçmişin sonuna ulaşıldı" : `${g.history.pages ?? 0} geçmiş sayfası`}
+                            </p>}
                           </td>
                           <td className="px-3 py-2.5 text-center">
                             <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${status.cls}`}>
@@ -525,6 +545,11 @@ export default function AdminPage() {
                           </td>
                           <td className="px-3 py-2.5 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              <button onClick={() => { setHistoryError(null); setHistoryGroupId(g.id); }}
+                                aria-label={`${g.name}: mesaj geçmişi`} title="Mesaj geçmişi"
+                                className="flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
+                                <History size={16} /><span>Geçmiş</span>
+                              </button>
                               {g.is_ingesting ? (
                                 <button
                                   onClick={() => cancelIngestion.mutate()}
@@ -545,7 +570,7 @@ export default function AdminPage() {
                               )}
                               <button
                                 onClick={() => { if (confirm(`"${g.name}" grubuna ait TÜM mesajlar silinecek. Emin misiniz?`)) deleteGroupMessages.mutate(g.id); }}
-                                disabled={g.is_ingesting}
+                                disabled={g.is_ingesting || g.history?.status === "queued" || g.history?.status === "running"}
                                 title={g.is_ingesting ? "Çekilirken silinemez" : "Tüm mesajları sil"}
                                 className="px-2 py-1 rounded-full text-xs font-medium bg-red-50 dark:bg-red-900/30 text-red-500 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                               >
@@ -567,6 +592,15 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+
+              {historyGroup && <GroupHistoryPanel key={historyGroup.id} group={{ ...historyGroup,
+                history_initial_before_at: new Date(Date.now() - Number(config?.ingestion_lookback_days || 30) * 86400000).toISOString() }}
+                pending={fetchHistory.isPending && fetchHistory.variables?.id === historyGroup.id}
+                cancelling={cancelHistory.isPending}
+                error={historyError}
+                onCancel={() => cancelHistory.mutate(historyGroup.id)}
+                onClose={() => setHistoryGroupId(null)}
+                onFetch={(size, recheck) => fetchHistory.mutate({ id: historyGroup.id, size, recheck })} />}
 
               {totalPages > 1 && (
                 <div className="flex items-center justify-between text-sm text-gray-500 dark:text-gray-400">

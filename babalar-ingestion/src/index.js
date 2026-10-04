@@ -2,7 +2,8 @@ const fs = require("fs");
 const cron = require("node-cron");
 const { initWhatsApp } = require("./whatsapp");
 const { runIngestion } = require("./scheduler");
-const { checkTrigger, checkReconnect, postLog, setIngestionStatus } = require("./api-client");
+const { runHistoryPage } = require("./history-worker");
+const { checkTrigger, checkReconnect, postLog, setIngestionStatus, recoverHistoryPages } = require("./api-client");
 
 const CRON = process.env.INGEST_CRON || "0 2 * * *";
 const POLL_INTERVAL_MS = 30_000;
@@ -24,7 +25,7 @@ async function main() {
 
   let isRunning = false;
 
-  async function safeRun(reason, targetGroupIds = null) {
+  async function safeRun(reason, targetGroupIds = null, history = false) {
     if (isRunning) return;
     isRunning = true;
     const label = Array.isArray(targetGroupIds)
@@ -34,7 +35,8 @@ async function main() {
     console.log(startMsg);
     postLog("INFO", startMsg).catch(() => {});
     try {
-      await runIngestion(client, targetGroupIds);
+      if (history) await runHistoryPage(client);
+      else await runIngestion(client, targetGroupIds);
     } catch (err) {
       const errMsg = `[babalar-ingestion] Ingestion error:\n${formatError(err)}`;
       console.error(errMsg);
@@ -46,6 +48,7 @@ async function main() {
 
   // Clear any stuck "İşleniyor" status left over from a previous crashed run
   await setIngestionStatus(null).catch(() => {});
+  await recoverHistoryPages();
 
   console.log(`[babalar-ingestion] Cron scheduled: ${CRON}`);
   postLog("INFO", `[babalar-ingestion] WhatsApp connected. Cron: ${CRON}`).catch(() => {});
@@ -66,8 +69,8 @@ async function main() {
 
     if (isRunning) return;
     try {
-      const { should_run, group_id, group_ids } = await checkTrigger();
-      if (should_run) safeRun("trigger", group_ids || group_id || null);
+      const { should_run, group_id, group_ids, history } = await checkTrigger();
+      if (should_run) safeRun(history ? "history" : "trigger", group_ids || group_id || null, history === true);
     } catch (_) {}
   }, POLL_INTERVAL_MS);
 

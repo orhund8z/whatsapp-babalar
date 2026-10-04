@@ -121,6 +121,13 @@ On first connect, you need to scan a WhatsApp Web QR code. Two options:
 
 If the connection drops, the ingestion container restarts automatically and generates a new QR.
 
+The Groups table includes a **History** action for each group. Its side panel queues
+one older page at a time (250, 500, or 1,000 scanned messages), shows the backward
+cursor and saved counts, and supports retrying interrupted pages. History progress
+is persisted in PostgreSQL separately from the normal `last_ingested_at` checkpoint.
+Only history exposed by WhatsApp Web can be retrieved; the panel reports when no
+older messages are available and allows rechecking after further synchronization.
+
 ---
 
 ## Observability (Langfuse)

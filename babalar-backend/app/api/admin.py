@@ -1,5 +1,6 @@
 import secrets
 import json
+import uuid
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_admin_user
 from app.database import get_db
 from app.models.models import AdminConfig, DailyTotalUsage, InviteCode, Message, User, UserDailyUsage, WaGroup
+from app.services.history import PREFIX as HISTORY_PREFIX, history_key, queue_history, cancel_history
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -17,7 +19,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 @router.get("/config")
 async def get_config(db: AsyncSession = Depends(get_db), _: User = Depends(get_admin_user)):
     rows = await db.execute(select(AdminConfig))
-    return {row.key: row.value for row in rows.scalars()}
+    return {row.key: row.value for row in rows.scalars() if not row.key.startswith(HISTORY_PREFIX)}
 
 
 class ConfigUpdate(BaseModel):
@@ -158,6 +160,8 @@ async def list_groups(db: AsyncSession = Depends(get_db), _: User = Depends(get_
         ).group_by(Message.group_id)
     )
     stats = {r.group_id: r for r in stats_rows}
+    history_rows = (await db.execute(select(AdminConfig).where(AdminConfig.key.startswith(HISTORY_PREFIX)))).scalars().all()
+    histories = {row.key: json.loads(row.value) for row in history_rows}
     active_status = await db.get(AdminConfig, "ingesting_group_wa_id")
     ingesting_wa_id = active_status.value if active_status else None
     force_run_row = await db.get(AdminConfig, "force_run")
@@ -187,6 +191,7 @@ async def list_groups(db: AsyncSession = Depends(get_db), _: User = Depends(get_
             "newest_message_at": stats[g.id].newest if g.id in stats else None,
             "is_ingesting": g.wa_group_id == ingesting_wa_id,
             "is_pending": is_pending(g),
+            "history": histories.get(history_key(g.id)),
         }
         for g in groups
     ]
@@ -216,6 +221,23 @@ async def trigger_fetch_all(db: AsyncSession = Depends(get_db), _: User = Depend
 
 class FetchSelectedGroups(BaseModel):
     group_ids: list[str]
+
+
+class HistoryPageRequest(BaseModel):
+    page_size: int = 500
+    recheck: bool = False
+
+
+@router.post("/groups/{group_id}/history")
+async def trigger_history(group_id: uuid.UUID, req: HistoryPageRequest, db: AsyncSession = Depends(get_db), _: User = Depends(get_admin_user)):
+    if req.page_size not in (250, 500, 1000):
+        raise HTTPException(422, "Page size must be 250, 500 or 1000")
+    return await queue_history(db, group_id, req.page_size, req.recheck)
+
+
+@router.post("/groups/{group_id}/history/cancel")
+async def cancel_history_request(group_id: uuid.UUID, db: AsyncSession = Depends(get_db), _: User = Depends(get_admin_user)):
+    return await cancel_history(db, group_id)
 
 
 @router.post("/groups/fetch-selected")
@@ -261,7 +283,12 @@ async def delete_group_messages(group_id: str, db: AsyncSession = Depends(get_db
     group = await db.get(WaGroup, uuid.UUID(group_id))
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+    history = await db.get(AdminConfig, history_key(group.id))
+    if history and json.loads(history.value).get("status") in ("queued", "running"):
+        raise HTTPException(409, "Geçmiş taraması bitmeden mesajlar silinemez.")
     await db.execute(delete(Message).where(Message.group_id == group.id))
+    if history:
+        await db.delete(history)
     group.last_ingested_at = None
     await db.commit()
     return {"ok": True}

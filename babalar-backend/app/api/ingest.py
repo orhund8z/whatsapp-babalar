@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models.models import AdminConfig, Message, WaGroup
 from app.services.categorizer import categorize_batch
 from app.services.embedding import embed_batch
+from app.services.history import PREFIX as HISTORY_PREFIX, claim_history, finish_history, recover_history
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
 
@@ -46,7 +47,7 @@ async def ingest_messages(
         db.add(group)
         await db.flush()
 
-    candidates = [(raw.sent_at, raw.content.strip()) for raw in req.messages if len(raw.content.strip()) >= 40]
+    candidates = list(dict.fromkeys((raw.sent_at, raw.content.strip()) for raw in req.messages if len(raw.content.strip()) >= 40))
     if not candidates:
         return {"saved": 0, "group": req.group_name}
 
@@ -133,25 +134,54 @@ async def get_ingest_config(db: AsyncSession = Depends(get_db), _: None = Depend
 
 @router.get("/trigger")
 async def check_trigger(db: AsyncSession = Depends(get_db), _: None = Depends(verify_ingest_key)):
-    pending = await db.execute(
-        select(WaGroup).where(WaGroup.is_active == True, WaGroup.last_ingested_at == None).limit(1)
-    )
-    if pending.scalar_one_or_none() is not None:
-        return {"should_run": True, "group_id": None}
+    history_rows = (await db.execute(select(AdminConfig).where(AdminConfig.key.startswith(HISTORY_PREFIX)))).scalars().all()
+    if any(json.loads(row.value).get("status") == "queued" for row in history_rows):
+        return {"should_run": True, "history": True}
+    force_group_ids = await db.get(AdminConfig, "force_run_group_ids")
+    if force_group_ids:
+        group_ids = json.loads(force_group_ids.value)
+        return {"should_run": True, "group_ids": group_ids}
     force = await db.get(AdminConfig, "force_run")
     if force:
         # Don't delete here — let the scheduler clear it at the start of the actual run.
         # "all" means fetch all active groups (same as cron), specific wa_group_id means per-group.
         group_id = None if force.value == "all" else force.value
         return {"should_run": True, "group_id": group_id}
-    force_group_ids = await db.get(AdminConfig, "force_run_group_ids")
-    if force_group_ids:
-        try:
-            group_ids = json.loads(force_group_ids.value)
-        except Exception:
-            group_ids = []
-        return {"should_run": True, "group_ids": group_ids}
+    pending = await db.execute(
+        select(WaGroup).where(WaGroup.is_active == True, WaGroup.last_ingested_at == None).limit(1)
+    )
+    if pending.scalar_one_or_none() is not None:
+        return {"should_run": True, "group_id": None}
     return {"should_run": False, "group_id": None}
+
+
+class HistoryPageResult(BaseModel):
+    key: str
+    request_id: str
+    before_at: str | None = None
+    before_id: str | None = None
+    exhausted: bool = False
+    scanned: int = Field(default=0, ge=0)
+    saved: int = Field(default=0, ge=0)
+    error: str | None = None
+
+
+@router.post("/history/claim")
+async def claim_history_page(db: AsyncSession = Depends(get_db), _: None = Depends(verify_ingest_key)):
+    return await claim_history(db)
+
+
+@router.post("/history/complete")
+async def complete_history_page(req: HistoryPageResult, db: AsyncSession = Depends(get_db), _: None = Depends(verify_ingest_key)):
+    if not req.key.startswith(HISTORY_PREFIX):
+        raise HTTPException(422, "Invalid history key")
+    return await finish_history(db, req.key, req)
+
+
+@router.post("/history/recover")
+async def recover_history_pages(db: AsyncSession = Depends(get_db), _: None = Depends(verify_ingest_key)):
+    await recover_history(db)
+    return {"ok": True}
 
 
 class LogEntry(BaseModel):

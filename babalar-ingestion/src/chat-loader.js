@@ -25,10 +25,16 @@ async function getChatsWithRetry(client, logWarn, opts = {}) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const chats = await Promise.race([
-        client.getChats(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("getChats timeout after 15 minutes")), timeoutMs)),
-      ]);
+      let timeout;
+      let chats;
+      try {
+        chats = await Promise.race([
+          client.getChats(),
+          new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error(`getChats timeout after ${timeoutMs}ms`)), timeoutMs); }),
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
       if (Array.isArray(chats) && chats.length > 0) {
         return chats;
       }
