@@ -1,4 +1,5 @@
 import secrets
+import json
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -161,13 +162,18 @@ async def list_groups(db: AsyncSession = Depends(get_db), _: User = Depends(get_
     ingesting_wa_id = active_status.value if active_status else None
     force_run_row = await db.get(AdminConfig, "force_run")
     pending_wa_id = force_run_row.value if force_run_row else None
+    force_run_group_ids_row = await db.get(AdminConfig, "force_run_group_ids")
+    try:
+        pending_wa_ids = set(json.loads(force_run_group_ids_row.value)) if force_run_group_ids_row else set()
+    except Exception:
+        pending_wa_ids = set()
 
     def is_pending(g: WaGroup) -> bool:
         if ingesting_wa_id == g.wa_group_id:
             return False  # already ingesting, not just pending
         if pending_wa_id == "all":
             return g.is_active
-        return pending_wa_id == g.wa_group_id
+        return pending_wa_id == g.wa_group_id or g.wa_group_id in pending_wa_ids
 
     return [
         {
