@@ -93,6 +93,10 @@ async function runIngestion(client, targetGroupId = null) {
       logWarn(`[scheduler] "${group.group_name}" not found in WhatsApp, skipping.`);
       continue;
     }
+    if (chat.__minimal) {
+      logWarn(`[scheduler] "${group.group_name}" discovered through minimal fallback; message ingestion skipped because WhatsApp getChats did not return a full chat object.`);
+      continue;
+    }
 
     const since = group.last_ingested_at
       ? new Date(group.last_ingested_at)

@@ -38,6 +38,11 @@ test("getChatsWithRetry throws the last error after attempts are exhausted", asy
       calls += 1;
       throw new Error("still syncing");
     },
+    pupPage: {
+      async evaluate() {
+        return [];
+      },
+    },
   };
 
   await assert.rejects(
@@ -49,4 +54,26 @@ test("getChatsWithRetry throws the last error after attempts are exhausted", asy
     /still syncing/
   );
   assert.equal(calls, 2);
+});
+
+test("getChatsWithRetry falls back to minimal group discovery", async () => {
+  const minimalChats = [{ id: { _serialized: "123@g.us" }, name: "Babalar", isGroup: true, __minimal: true }];
+  const client = {
+    async getChats() {
+      throw new Error("r");
+    },
+    pupPage: {
+      async evaluate() {
+        return minimalChats;
+      },
+    },
+  };
+
+  const chats = await getChatsWithRetry(client, () => {}, {
+    maxAttempts: 1,
+    retryDelayMs: 1,
+    timeoutMs: 1000,
+  });
+
+  assert.deepEqual(chats, minimalChats);
 });

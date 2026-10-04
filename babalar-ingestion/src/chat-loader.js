@@ -20,6 +20,7 @@ async function getChatsWithRetry(client, logWarn, opts = {}) {
   const maxAttempts = opts.maxAttempts || GET_CHATS_MAX_ATTEMPTS;
   const timeoutMs = opts.timeoutMs || GET_CHATS_TIMEOUT_MS;
   const retryDelayMs = opts.retryDelayMs || 15000;
+  const allowMinimalFallback = opts.allowMinimalFallback !== false;
   let lastError;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -43,7 +44,46 @@ async function getChatsWithRetry(client, logWarn, opts = {}) {
     }
   }
 
+  if (allowMinimalFallback) {
+    logWarn(`[scheduler] getChats failed after ${maxAttempts} attempts; trying minimal group discovery fallback:\n${formatError(lastError)}`);
+    const minimalChats = await getMinimalChats(client);
+    if (minimalChats.length > 0) {
+      logWarn(`[scheduler] Minimal group discovery fallback returned ${minimalChats.length} chat(s). Message ingestion requires full chat objects and may be skipped until getChats recovers.`);
+      return minimalChats;
+    }
+  }
+
   throw lastError;
 }
 
-module.exports = { getChatsWithRetry };
+async function getMinimalChats(client) {
+  return await client.pupPage.evaluate(() => {
+    const chatCollection = window.require("WAWebCollections").Chat;
+    const chats = chatCollection.getModelsArray();
+    return chats.flatMap((chat) => {
+      try {
+        const serializedId = chat.id?._serialized || chat.id?.toString?.() || "";
+        const isGroup = Boolean(chat.groupMetadata) || serializedId.endsWith("@g.us");
+        if (!serializedId || !isGroup) return [];
+
+        const name =
+          chat.formattedTitle ||
+          chat.name ||
+          chat.contact?.formattedName ||
+          chat.contact?.pushname ||
+          serializedId;
+
+        return [{
+          id: { _serialized: serializedId },
+          name,
+          isGroup: true,
+          __minimal: true,
+        }];
+      } catch (_) {
+        return [];
+      }
+    });
+  });
+}
+
+module.exports = { getChatsWithRetry, getMinimalChats };
