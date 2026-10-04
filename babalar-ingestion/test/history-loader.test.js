@@ -57,3 +57,13 @@ test("serialization failures reject the page so its cursor cannot be committed",
   const f = fixture([{ t: 90, body: "broken" }]);
   await assert.rejects(() => fetchHistoryPage(f.client, job), /pagination key/);
 });
+
+test("new WhatsApp message keys use their canonical string representation", async () => {
+  const item = message("unused", 90);
+  item.id = { fromMe: false, id: "message", toString: () => "false_group_message" };
+  item.author = { user: "sender" };
+  const f = fixture([item]);
+  const result = await fetchHistoryPage(f.client, { ...job, page_size: 1 });
+  assert.equal(result.before_id, "false_group_message");
+  assert.equal(result.messages[0].sender_name, null);
+});

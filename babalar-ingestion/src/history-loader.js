@@ -5,8 +5,10 @@ async function fetchHistoryPage(client, job) {
     const beforeTs = Math.floor(new Date(before_at).getTime() / 1000);
     if (!Number.isFinite(beforeTs)) throw new Error("Invalid history cursor");
     const key = msg => {
-      const id = msg.id?._serialized || (typeof msg.id === "string" ? msg.id : null);
-      if (!id || !Number.isFinite(msg.t)) throw new Error("WhatsApp message has no valid pagination key");
+      const id = msg.id?._serialized || (typeof msg.id === "string" ? msg.id : msg.id?.toString?.());
+      if (typeof id !== "string" || !id || id === "[object Object]" || !Number.isFinite(msg.t)) {
+        throw new Error("WhatsApp message has no valid pagination key");
+      }
       return id;
     };
     const messages = new Map();
@@ -37,7 +39,7 @@ async function fetchHistoryPage(client, job) {
         if (msg.isNotification) return [];
         const model = window.WWebJS.getMessageModel(msg);
         if (!model.body || model.body.trim().length < 40) return [];
-        return [{ sender_name: model.notifyName || model.author?._serialized || model.author || null,
+        return [{ sender_name: model.notifyName || model.author?._serialized || (typeof model.author === "string" ? model.author : null),
           content: model.body, sent_at: new Date(msg.t * 1000).toISOString() }];
       }),
     };
