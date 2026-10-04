@@ -3,6 +3,17 @@ const { discoverGroups, getActiveGroups, sendMessages, markGroupChecked, getInge
 
 const BATCH_SIZE = 100;
 
+function formatError(err) {
+  if (!err) return "Unknown error";
+  if (err.stack) return err.stack;
+  if (err.message) return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch (_) {
+    return String(err);
+  }
+}
+
 async function runIngestion(client, targetGroupId = null) {
   // Record start time before cache load so mark-checked uses this timestamp,
   // not the end time. Messages arriving during a long run won't be permanently skipped.
@@ -29,7 +40,7 @@ async function runIngestion(client, targetGroupId = null) {
     try {
       await discoverGroups(chat.id._serialized, chat.name);
     } catch (err) {
-      logWarn(`[scheduler] Discovery failed for "${chat.name}": ${err.message}`);
+      logWarn(`[scheduler] Discovery failed for "${chat.name}": ${formatError(err)}`);
     }
   }
   logInfo("[scheduler] Group discovery done. Only active groups will be ingested.");
@@ -41,14 +52,14 @@ async function runIngestion(client, targetGroupId = null) {
     lookbackDays = cfg.ingestion_lookback_days || 30;
     console.log(`[scheduler] Lookback: ${lookbackDays} days.`);
   } catch (err) {
-    logWarn(`[scheduler] Could not fetch ingest config, defaulting to 30 days: ${err.message}`);
+    logWarn(`[scheduler] Could not fetch ingest config, defaulting to 30 days: ${formatError(err)}`);
   }
 
   let activeGroups = [];
   try {
     activeGroups = await getActiveGroups();
   } catch (err) {
-    logError(`[scheduler] Failed to fetch active groups: ${err.message}`);
+    logError(`[scheduler] Failed to fetch active groups: ${formatError(err)}`);
     return;
   }
 
@@ -124,7 +135,7 @@ async function runIngestion(client, targetGroupId = null) {
         logWarn(`[scheduler] "${group.group_name}": cancelled — exiting process.`);
         process.exit(0);
       }
-      logError(`[scheduler] Error processing "${group.group_name}": ${err.message}`);
+      logError(`[scheduler] Error processing "${group.group_name}":\n${formatError(err)}`);
     } finally {
       await setIngestionStatus(null).catch(() => {});
     }

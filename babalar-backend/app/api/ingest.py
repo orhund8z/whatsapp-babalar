@@ -188,6 +188,11 @@ async def set_qr(req: QRRequest, db: AsyncSession = Depends(get_db), _: None = D
         row.value = req.data_url
     else:
         db.add(AdminConfig(key="whatsapp_qr", value=req.data_url))
+    status = await db.get(AdminConfig, "whatsapp_status")
+    if status:
+        status.value = "waiting_qr"
+    else:
+        db.add(AdminConfig(key="whatsapp_status", value="waiting_qr"))
     await db.commit()
     return {"ok": True}
 
@@ -228,6 +233,10 @@ async def update_whatsapp_status(req: WhatsAppStatusUpdate, db: AsyncSession = D
         row.value = req.status
     else:
         db.add(AdminConfig(key="whatsapp_status", value=req.status))
+    if req.status != "waiting_qr":
+        qr = await db.get(AdminConfig, "whatsapp_qr")
+        if qr:
+            await db.delete(qr)
     await db.commit()
     return {"ok": True}
 

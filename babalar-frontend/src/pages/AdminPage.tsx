@@ -804,10 +804,13 @@ export default function AdminPage() {
                       ? entry.msg.replace(new RegExp(`(${filterLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"), "|||$1|||")
                       : entry.msg;
                     return (
-                      <div key={i} className="flex gap-2 py-0.5 border-b border-gray-800 last:border-0">
-                        <span className="text-gray-500 flex-shrink-0 w-[105px]">{dateStr} {time}</span>
-                        <span className={`flex-shrink-0 w-10 font-bold ${levelCls}`}>{entry.level.slice(0, 4)}</span>
-                        <span className="text-gray-200 break-all">
+                      <div
+                        key={i}
+                        className="grid grid-cols-[104px_54px_minmax(0,1fr)] gap-2 py-1.5 border-b border-gray-800 last:border-0 items-start"
+                      >
+                        <span className="text-gray-500 whitespace-nowrap">{dateStr} {time}</span>
+                        <span className={`font-bold whitespace-nowrap ${levelCls}`}>{entry.level}</span>
+                        <span className="text-gray-200 min-w-0 whitespace-pre-wrap break-words">
                           {highlighted.split("|||").map((part, j) =>
                             j % 2 === 1
                               ? <mark key={j} className="bg-yellow-400 text-black rounded px-0.5">{part}</mark>

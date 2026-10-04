@@ -3,7 +3,33 @@ const qrcode = require("qrcode-terminal");
 const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
-const { setQR, clearQR, setWhatsAppStatus } = require("./api-client");
+const { setQR, clearQR, setWhatsAppStatus, postLog } = require("./api-client");
+
+function formatError(err) {
+  if (!err) return "Unknown error";
+  if (err.stack) return err.stack;
+  if (err.message) return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch (_) {
+    return String(err);
+  }
+}
+
+function logInfo(message) {
+  console.log(message);
+  postLog("INFO", message).catch(() => {});
+}
+
+function logWarn(message) {
+  console.warn(message);
+  postLog("WARN", message).catch(() => {});
+}
+
+function logError(message) {
+  console.error(message);
+  postLog("ERROR", message).catch(() => {});
+}
 
 function clearChromiumLocks(sessionPath) {
   const patterns = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
@@ -51,29 +77,29 @@ async function initWhatsApp() {
     try {
       const dataUrl = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
       await setQR(dataUrl);
-      console.log("[whatsapp] QR posted to backend.");
+      logInfo("[whatsapp] QR posted to backend. Open Admin > WhatsApp Groups and scan the displayed code.");
     } catch (e) {
-      console.warn("[whatsapp] Could not post QR to backend:", e.message);
+      logWarn(`[whatsapp] Could not post QR to backend:\n${formatError(e)}`);
     }
   });
 
   client.on("authenticated", async () => {
-    console.log("[whatsapp] Session authenticated.");
+    logInfo("[whatsapp] Session authenticated.");
     try { await clearQR(); } catch (_) {}
     try { await setWhatsAppStatus("connected"); } catch (_) {}
   });
 
   client.on("auth_failure", async (msg) => {
-    console.error("[whatsapp] Auth failure:", msg);
+    logError(`[whatsapp] Auth failure: ${msg || "unknown"}`);
     try { await setWhatsAppStatus("auth_failure"); } catch (_) {}
     process.exit(1);
   });
 
   client.on("disconnected", async (reason) => {
-    console.warn("[whatsapp] Disconnected:", reason);
+    logWarn(`[whatsapp] Disconnected: ${reason || "unknown"}`);
     try { await setWhatsAppStatus("disconnected"); } catch (_) {}
     if (reason === "LOGOUT") {
-      console.warn("[whatsapp] LOGOUT detected — clearing session and restarting...");
+      logWarn("[whatsapp] LOGOUT detected — clearing session and restarting...");
       try { fs.rmSync("./session", { recursive: true, force: true }); } catch (_) {}
       process.exit(1);
     }
@@ -81,12 +107,12 @@ async function initWhatsApp() {
 
   await new Promise((resolve) => {
     client.on("ready", async () => {
-      console.log("[whatsapp] Connected. Waiting for sync (60s)...");
+      logInfo("[whatsapp] Connected. Waiting for sync (60s)...");
       // Disable page-level timeouts — getChats() on large accounts can take many minutes.
       // We rely on our own application-level timeout in scheduler.js instead.
       try { client.pupPage.setDefaultTimeout(0); } catch (_) {}
       await new Promise((r) => setTimeout(r, 60000));
-      console.log("[whatsapp] Ready.");
+      logInfo("[whatsapp] Ready.");
       resolve();
     });
     client.initialize();

@@ -7,6 +7,17 @@ const { checkTrigger, checkReconnect, postLog, setIngestionStatus } = require(".
 const CRON = process.env.INGEST_CRON || "0 2 * * *";
 const POLL_INTERVAL_MS = 30_000;
 
+function formatError(err) {
+  if (!err) return "Unknown error";
+  if (err.stack) return err.stack;
+  if (err.message) return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch (_) {
+    return String(err);
+  }
+}
+
 async function main() {
   console.log(`[babalar-ingestion] Starting... (version: ${process.env.APP_VERSION || "dev"})`);
   const client = await initWhatsApp();
@@ -23,7 +34,7 @@ async function main() {
     try {
       await runIngestion(client, targetGroupId);
     } catch (err) {
-      const errMsg = `[babalar-ingestion] Ingestion error: ${err.message}`;
+      const errMsg = `[babalar-ingestion] Ingestion error:\n${formatError(err)}`;
       console.error(errMsg);
       postLog("ERROR", errMsg).catch(() => {});
     } finally {
@@ -65,7 +76,9 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("[babalar-ingestion] Fatal:", err);
+main().catch(async (err) => {
+  const errMsg = `[babalar-ingestion] Fatal:\n${formatError(err)}`;
+  console.error(errMsg);
+  await postLog("ERROR", errMsg).catch(() => {});
   process.exit(1);
 });
