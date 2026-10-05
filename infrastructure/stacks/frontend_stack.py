@@ -45,23 +45,35 @@ class FrontendStack(Stack):
                 allowed_methods=cf.AllowedMethods.ALLOW_ALL,
             )
 
+        spa_router = cf.Function(
+            self, "SpaRouter",
+            code=cf.FunctionCode.from_inline("""
+function handler(event) {
+    var request = event.request;
+    var leaf = request.uri.split('/').pop();
+    if (request.uri.indexOf('/api/') !== 0 && leaf.indexOf('.') === -1) {
+        request.uri = '/index.html';
+    }
+    return request;
+}
+"""),
+        )
+
         distribution = cf.Distribution(
             self, "Distribution",
             default_behavior=cf.BehaviorOptions(
                 origin=origins.S3BucketOrigin.with_origin_access_control(bucket),
                 viewer_protocol_policy=cf.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 cache_policy=cf.CachePolicy.CACHING_OPTIMIZED,
+                function_associations=[cf.FunctionAssociation(
+                    function=spa_router,
+                    event_type=cf.FunctionEventType.VIEWER_REQUEST,
+                )],
             ),
             additional_behaviors=additional_behaviors,
             default_root_object="index.html",
             price_class=cf.PriceClass.PRICE_CLASS_100,
             geo_restriction=cf.GeoRestriction.allowlist("DE"),
-            error_responses=[
-                # S3 returns 403 (not 404) for missing keys when public access is blocked.
-                # Convert to 200+index.html so React Router handles client-side routing.
-                # Using 403 (not 404) avoids accidentally converting API 404s to HTML.
-                cf.ErrorResponse(http_status=403, response_http_status=200, response_page_path="/index.html"),
-            ],
             domain_names=domain_names,
             certificate=certificate,
         )
