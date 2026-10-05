@@ -12,6 +12,7 @@ from app.auth import get_admin_user
 from app.database import get_db
 from app.models.models import AdminConfig, DailyTotalUsage, InviteCode, Message, User, UserDailyUsage, WaGroup
 from app.services.chat_import import DEFAULT_TZ, MAX_UPLOAD_BYTES, ChatImportError, decode_upload, parse_export, plan_import, run_import
+from app.services.log_buffer import append_log
 from app.services.history import PREFIX as HISTORY_PREFIX, history_key, queue_history, cancel_history
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -308,10 +309,13 @@ async def import_chat_export(
     group = await db.get(WaGroup, group_id)
     if not group:
         raise HTTPException(404, "Group not found")
+    filename = file.filename or "export"
+    label = f"[import] {group.group_name} / {filename}"
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     try:
-        parsed = parse_export(decode_upload(data, file.filename or ""), timezone)
+        parsed = parse_export(decode_upload(data, filename), timezone)
     except ChatImportError as e:
+        append_log("ERROR", f"{label}: {e}")
         raise HTTPException(422, str(e))
 
     new_messages = await plan_import(db, group, parsed)
@@ -329,7 +333,17 @@ async def import_chat_export(
         "sample": [{"sent_at": m.sent_at.isoformat(), "sender": m.sender_name, "content": m.content[:120]} for m in new_messages[:5]],
     }
     if dry_run:
+        append_log("INFO", f"{label}: preview parsed={report['parsed']} new={report['new']}")
         return report
+    append_log("INFO", f"{label}: import started, {len(new_messages)} new messages")
+    try:
+        report["saved"] = await run_import(db, group.id, new_messages)
+    except Exception as e:
+        await db.rollback()
+        append_log("ERROR", f"{label}: import failed: {type(e).__name__}: {e}")
+        raise HTTPException(500, f"İçe aktarma başarısız: {type(e).__name__}: {e}")
+    append_log("INFO", f"{label}: import finished, saved={report['saved']}")
+    return report
     report["saved"] = await run_import(db, group.id, new_messages)
     return report
 

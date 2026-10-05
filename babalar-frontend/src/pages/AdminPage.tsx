@@ -5,7 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import api from "../api/client";
 import { useThemeStore } from "../store/theme";
 import { useAuthStore } from "../store/auth";
-import { History, LoaderCircle } from "lucide-react";
+import { FileUp, History, LoaderCircle } from "lucide-react";
 import GroupHistoryPanel from "../components/GroupHistoryPanel";
 import ChatImportPanel from "../components/ChatImportPanel";
 
@@ -147,6 +147,7 @@ export default function AdminPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [groupPage, setGroupPage] = useState(0);
   const [historyGroupId, setHistoryGroupId] = useState<string | null>(null);
+  const [importGroup, setImportGroup] = useState<{ id: string; name: string } | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const GROUP_PAGE_SIZE = 25;
   const { theme, toggle } = useThemeStore();
@@ -551,6 +552,11 @@ export default function AdminPage() {
                                 className="flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
                                 <History size={16} /><span>Geçmiş</span>
                               </button>
+                              <button onClick={() => setImportGroup({ id: g.id, name: g.name })}
+                                aria-label={`${g.name}: sohbet dosyası yükle`} title="WhatsApp sohbet dışa aktarımını yükle"
+                                className="flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
+                                <FileUp size={16} /><span>Yükle</span>
+                              </button>
                               {g.is_ingesting ? (
                                 <button
                                   onClick={() => cancelIngestion.mutate()}
@@ -594,7 +600,7 @@ export default function AdminPage() {
                 </table>
               </div>
 
-              <ChatImportPanel groups={(groups ?? []).map((g: any) => ({ id: g.id, name: g.name }))} />
+              {importGroup && <ChatImportPanel key={importGroup.id} group={importGroup} onClose={() => setImportGroup(null)} />}
 
               {historyGroup && <GroupHistoryPanel key={historyGroup.id} group={{ ...historyGroup,
                 history_initial_before_at: new Date(Date.now() - Number(config?.ingestion_lookback_days || 30) * 86400000).toISOString() }}
