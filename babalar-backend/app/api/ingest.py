@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models.models import AdminConfig, Message, WaGroup
 from app.services.categorizer import categorize_batch
 from app.services.embedding import embed_batch
+from app.services.pii import first_name, scrub_text
 from app.services.history import PREFIX as HISTORY_PREFIX, claim_history, finish_history, recover_history
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
@@ -47,33 +48,42 @@ async def ingest_messages(
         db.add(group)
         await db.flush()
 
-    candidates = list(dict.fromkeys((raw.sent_at, raw.content.strip()) for raw in req.messages if len(raw.content.strip()) >= 40))
-    if not candidates:
+    # Scrub PII before dedup/categorize/embed/insert; sender names are reduced to a first name.
+    items: dict[tuple, tuple[str, str | None]] = {}
+    for raw in req.messages:
+        original = raw.content.strip()
+        clean = scrub_text(original)
+        if len(clean) >= 40:
+            items.setdefault((raw.sent_at, clean), (original, first_name(raw.sender_name)))
+    if not items:
         return {"saved": 0, "group": req.group_name}
 
-    # Deduplicate: find which (sent_at, content) pairs already exist for this group
+    # Deduplicate against both the scrubbed and the original text (rows stored before scrubbing hold raw text)
+    lookup = list({key for key in items} | {(sent_at, original) for (sent_at, _), (original, _) in items.items()})
     existing_rows = await db.execute(
         select(Message.sent_at, Message.content).where(
             Message.group_id == group.id,
-            tuple_(Message.sent_at, Message.content).in_(candidates),
+            tuple_(Message.sent_at, Message.content).in_(lookup),
         )
     )
     existing = {(row.sent_at, row.content) for row in existing_rows}
-
-    sender_map = {(r.sent_at, r.content.strip()): r.sender_name for r in req.messages}
-    new_items = [(sent_at, content) for sent_at, content in candidates if (sent_at, content) not in existing]
+    new_items = [
+        ((sent_at, clean), sender)
+        for (sent_at, clean), (original, sender) in items.items()
+        if (sent_at, clean) not in existing and (sent_at, original) not in existing
+    ]
 
     saved = 0
     if new_items:
-        contents = [content for _, content in new_items]
+        contents = [clean for (_, clean), _ in new_items]
         categories = await categorize_batch(contents)
         embeddings = await embed_batch(contents)
 
-        for (sent_at, content), category, embedding in zip(new_items, categories, embeddings):
+        for ((sent_at, clean), sender), category, embedding in zip(new_items, categories, embeddings):
             db.add(Message(
                 group_id=group.id,
-                sender_name=sender_map.get((sent_at, content)),
-                content=content,
+                sender_name=sender,
+                content=clean,
                 sent_at=sent_at,
                 category=category,
                 embedding=embedding,

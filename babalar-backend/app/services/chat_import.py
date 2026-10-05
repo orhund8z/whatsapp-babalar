@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import Message, WaGroup
 from app.services.categorizer import categorize_batch
 from app.services.embedding import embed_batch
+from app.services.pii import first_name, scrub_text
 
 MIN_CONTENT_LENGTH = 40  # same threshold as /api/ingest/messages
 BATCH_SIZE = 100
@@ -47,7 +48,7 @@ class ChatImportError(ValueError):
 @dataclass
 class ParsedMessage:
     sent_at: datetime  # UTC
-    sender_name: str
+    sender_name: str | None
     content: str
 
 
@@ -147,12 +148,13 @@ def _minute_key(sent_at: datetime, content: str) -> tuple[datetime, str]:
 
 
 async def plan_import(db: AsyncSession, group: WaGroup, parsed: ParseResult) -> list[ParsedMessage]:
-    """Messages that pass the length filter and are not already stored for the group."""
-    candidates = [m for m in parsed.messages if len(m.content) >= MIN_CONTENT_LENGTH]
+    """Scrubbed messages that pass the length filter and are not already stored for the group."""
+    candidates = [(m, scrub_text(m.content)) for m in parsed.messages]
+    candidates = [(m, clean) for m, clean in candidates if len(clean) >= MIN_CONTENT_LENGTH]
     if not candidates:
         return []
-    lo = min(m.sent_at for m in candidates) - timedelta(minutes=1)
-    hi = max(m.sent_at for m in candidates) + timedelta(minutes=1)
+    lo = min(m.sent_at for m, _ in candidates) - timedelta(minutes=1)
+    hi = max(m.sent_at for m, _ in candidates) + timedelta(minutes=1)
     rows = await db.execute(
         select(Message.sent_at, Message.content).where(
             Message.group_id == group.id, Message.sent_at.between(lo, hi)
@@ -160,11 +162,13 @@ async def plan_import(db: AsyncSession, group: WaGroup, parsed: ParseResult) -> 
     )
     seen = {_minute_key(r.sent_at, r.content.strip()) for r in rows}
     new: list[ParsedMessage] = []
-    for m in candidates:
-        key = _minute_key(m.sent_at, m.content)
-        if key not in seen:
-            seen.add(key)
-            new.append(m)
+    for m, clean in candidates:
+        clean_key = _minute_key(m.sent_at, clean)
+        raw_key = _minute_key(m.sent_at, m.content)  # rows stored before scrubbing hold raw text
+        if clean_key in seen or raw_key in seen:
+            continue
+        seen.add(clean_key)
+        new.append(ParsedMessage(sent_at=m.sent_at, sender_name=first_name(m.sender_name), content=clean))
     return new
 
 

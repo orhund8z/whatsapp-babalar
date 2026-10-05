@@ -13,7 +13,7 @@ type ImportReport = {
   first_at: string | null;
   last_at: string | null;
   saved?: number;
-  sample: { sent_at: string; sender: string; content: string }[];
+  sample: { sent_at: string; sender: string | null; content: string }[];
 };
 
 const fmt = (v?: string | null) => v ? new Date(v).toLocaleString("tr-TR", { dateStyle: "medium", timeStyle: "short" }) : "—";
@@ -95,7 +95,7 @@ export default function ChatImportPanel({ group, onClose }: { group: { id: strin
                 <div className="col-span-2"><dt className="text-xs text-gray-500">Tarih aralığı</dt><dd>{fmt(report.first_at)} – {fmt(report.last_at)}</dd></div>
               </dl>
               {report.dry_run && report.sample.map((s, i) => (
-                <p key={i} className="truncate text-xs text-gray-500 dark:text-gray-400">[{fmt(s.sent_at)}] {s.sender}: {s.content}</p>
+                <p key={i} className="truncate text-xs text-gray-500 dark:text-gray-400">[{fmt(s.sent_at)}] {s.sender ?? "Anonim"}: {s.content}</p>
               ))}
             </div>
           )}
