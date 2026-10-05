@@ -3,7 +3,7 @@ import json
 import uuid
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_admin_user
 from app.database import get_db
 from app.models.models import AdminConfig, DailyTotalUsage, InviteCode, Message, User, UserDailyUsage, WaGroup
+from app.services.chat_import import DEFAULT_TZ, MAX_UPLOAD_BYTES, ChatImportError, decode_upload, parse_export, plan_import, run_import
 from app.services.history import PREFIX as HISTORY_PREFIX, history_key, queue_history, cancel_history
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -292,6 +293,45 @@ async def delete_group_messages(group_id: str, db: AsyncSession = Depends(get_db
     group.last_ingested_at = None
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/groups/{group_id}/import")
+async def import_chat_export(
+    group_id: uuid.UUID,
+    file: UploadFile = File(...),
+    dry_run: bool = Form(True),
+    timezone: str = Form(DEFAULT_TZ),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
+    """Import a WhatsApp 'Export chat' file (.txt/.zip) into a group. dry_run only parses and reports."""
+    group = await db.get(WaGroup, group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        parsed = parse_export(decode_upload(data, file.filename or ""), timezone)
+    except ChatImportError as e:
+        raise HTTPException(422, str(e))
+
+    new_messages = await plan_import(db, group, parsed)
+    stamps = [m.sent_at for m in parsed.messages]
+    report = {
+        "dry_run": dry_run,
+        "timezone": timezone,
+        "parsed": len(parsed.messages),
+        "skipped_system": parsed.skipped_system,
+        "skipped_media": parsed.skipped_media,
+        "eligible": sum(1 for m in parsed.messages if len(m.content) >= 40),
+        "new": len(new_messages),
+        "first_at": min(stamps).isoformat() if stamps else None,
+        "last_at": max(stamps).isoformat() if stamps else None,
+        "sample": [{"sent_at": m.sent_at.isoformat(), "sender": m.sender_name, "content": m.content[:120]} for m in new_messages[:5]],
+    }
+    if dry_run:
+        return report
+    report["saved"] = await run_import(db, group.id, new_messages)
+    return report
 
 
 class BulkSetActive(BaseModel):

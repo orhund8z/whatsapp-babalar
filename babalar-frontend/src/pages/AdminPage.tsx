@@ -7,6 +7,7 @@ import { useThemeStore } from "../store/theme";
 import { useAuthStore } from "../store/auth";
 import { History, LoaderCircle } from "lucide-react";
 import GroupHistoryPanel from "../components/GroupHistoryPanel";
+import ChatImportPanel from "../components/ChatImportPanel";
 
 type Tab = "overview" | "groups" | "users" | "config" | "invites" | "logs";
 
@@ -592,6 +593,8 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+
+              <ChatImportPanel groups={(groups ?? []).map((g: any) => ({ id: g.id, name: g.name }))} />
 
               {historyGroup && <GroupHistoryPanel key={historyGroup.id} group={{ ...historyGroup,
                 history_initial_before_at: new Date(Date.now() - Number(config?.ingestion_lookback_days || 30) * 86400000).toISOString() }}
