@@ -2,11 +2,20 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.observability import langfuse
 from app.api import auth, chat, admin, ingest
+from contextlib import asynccontextmanager
+import asyncio
 
 APP_VERSION = os.getenv("APP_VERSION", "dev")
 
-app = FastAPI(title="Babalar API", version=APP_VERSION)
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    await asyncio.to_thread(langfuse.flush)
+
+
+app = FastAPI(title="Babalar API", version=APP_VERSION, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

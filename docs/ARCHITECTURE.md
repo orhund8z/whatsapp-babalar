@@ -292,6 +292,35 @@ Configured Langfuse score schemas:
 
 ## Ingestion Pipeline
 
+### Langfuse Evaluation Workflow
+
+Live RAG records trace-level `found`, `source_count`, `retrieval_count`,
+`top_similarity`, `answer_blocked`, and `decision_source`. Literal URL/number
+support checks score the candidate answer before the decision gate. JEV scores
+remain attached to `decide-answer`, now an evaluator observation, with a nested
+`jev-decision` generation reporting the actual model and token counts.
+
+```mermaid
+flowchart LR
+    CHAT[Chat answer] --> TRACE[Langfuse trace and scores]
+    THUMBS[Authenticated thumbs] --> TOKEN[User and trace-bound token]
+    TOKEN --> TRACE
+    DATA[40 synthetic Turkish cases] --> RUN[Langfuse experiment]
+    RUN --> GEN[Shared answer generation or JEV decision]
+    GEN --> EVAL[Found / facts / policy / URL / number graders]
+    EVAL --> COMPARE[Experiment comparison]
+    GEN --> JUDGE[Optional LLM faithfulness judge]
+    JUDGE --> COMPARE
+```
+
+The dataset is a workshop fixture suite, not an archive retrieval benchmark.
+Separately labelled `kind=archive` items run the complete live RAG path. SDK
+export-stage masking redacts contact patterns, structured sender fields, and
+sender context labels from both SDK and external OTel spans. No Langfuse secret
+reaches the browser; feedback proofs expire after seven days and re-ratings reuse
+one score ID. See [Langfuse Workshop](langfuse-workshop.md) for runnable commands,
+score definitions, and masking limitations.
+
 ```
 Nightly 02:00 UTC (node-cron)
     → Connect to WhatsApp Web (persisted session)

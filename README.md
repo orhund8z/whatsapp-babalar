@@ -113,6 +113,9 @@ docker compose exec backend python -m app.cli setup \
 
 ## WhatsApp Connection
 
+For trace scores, user feedback, the Turkish demo dataset, and runnable JEV/LLM
+experiments, see [Langfuse Workshop](docs/langfuse-workshop.md).
+
 On first connect, you need to scan a WhatsApp Web QR code. Two options:
 
 **Local:** QR code is printed to terminal via `docker compose logs ingestion`.
@@ -160,9 +163,9 @@ When configured, JEV runs after answer generation as a typed decision layer. It 
 - `rag-answer` — root trace, tagged with `user_id` for per-user filtering
   - `decide-question` — early request decision span (for example private-contact requests)
   - `preprocess-query` — GPT-4o-mini query rewrite/typo-fix generation
-  - `pgvector-search` — vector similarity search span (query, top_k, result count)
-  - `generate-answer` — final GPT-4o-mini answer generation
-  - `decide-answer` — JEV/PII decision span (action, risk scores, block reason)
+  - `pgvector-search` — vector retriever (query, top_k, result count)
+  - `answer-from-context` — answer assembly span with nested `generate-answer` and `decide-answer`
+  - `jev-decision` — nested JEV generation with model and reported token usage
 - `categorize-batch` — one trace per ingestion categorization run (message/chunk counts, category distribution)
 
 **Langfuse score configs:**
@@ -175,6 +178,10 @@ When configured, JEV runs after answer generation as a typed decision layer. It 
 | `answer_action` | categorical | `show`, `show_with_caveat`, `reject`, or `needs_review` |
 
 View traces at your Langfuse project URL (cloud.langfuse.com or self-hosted).
+
+Chat answers also record result/retrieval scores and support authenticated thumbs
+feedback. The [workshop guide](docs/langfuse-workshop.md) covers the 40-case synthetic
+dataset, experiments, code graders, and optional LLM judge.
 
 ---
 

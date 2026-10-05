@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from app.config import settings
+from app.observability import langfuse as _telemetry  # initialize masking before decorators
 from langfuse import get_client, observe
 
 _PHONE_RE = re.compile(
@@ -154,6 +155,7 @@ def _record_decision_scores(decision: AnswerDecision) -> None:
                 data_type="NUMERIC",
             )
         langfuse.score_current_span(name="answer_action", value=decision.action, data_type="CATEGORICAL")
+        langfuse.score_current_span(name="decision_source", value=decision.source, data_type="CATEGORICAL")
     except Exception:
         # Scores are secondary telemetry. They must never affect the user path.
         pass
@@ -183,7 +185,7 @@ async def decide_question(question: str) -> AnswerDecision:
     return decision
 
 
-@observe(name="decide-answer", capture_input=False, capture_output=False)
+@observe(name="decide-answer", as_type="evaluator", capture_input=False, capture_output=False)
 async def decide_answer(
     *,
     question: str,
@@ -267,12 +269,16 @@ async def decide_answer(
     }
 
     try:
-        async with AsyncTypeSafeClient() as client:
-            response = await client.system_one(
-                model=settings.jev_model,
-                state=state,
-                questions=questions,
-            )
+        with langfuse.start_as_current_observation(as_type="generation", name="jev-decision",
+                model=settings.jev_model, input=state, metadata={"provider": "typesafe"}) as generation:
+            async with AsyncTypeSafeClient() as client:
+                response = await client.system_one(model=settings.jev_model, state=state, questions=questions)
+            usage = {name: value for name, value in {
+                "input": getattr(response.usage, "input_tokens", None),
+                "output": getattr(response.usage, "output_tokens", None),
+            }.items() if value is not None}
+            generation.update(model=response.model, usage_details=usage,
+                              output={key: value.model_dump(mode="json") for key, value in response.answers.items()})
     except Exception as exc:
         decision = AnswerDecision(source="error")
         _record_decision_scores(decision)

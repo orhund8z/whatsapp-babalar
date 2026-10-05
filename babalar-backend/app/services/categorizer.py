@@ -3,6 +3,7 @@ import json
 
 from openai import RateLimitError
 from app.config import settings  # noqa: F401  (sets LANGFUSE_TRACING_ENABLED before langfuse import)
+from app.observability import langfuse as _telemetry
 from langfuse import get_client, observe
 from langfuse.openai import AsyncOpenAI
 

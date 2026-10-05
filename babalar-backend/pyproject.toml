@@ -15,7 +15,7 @@ dependencies = [
     "alembic>=1.13",
     "anthropic>=0.36",
     "openai>=1.50",
-    "langfuse>=4,<5",
+    "langfuse==4.17.0",
     "typesafe-sdk==0.7.2",
     "openinference-instrumentation-typesafe==0.1.4",
     "python-jose[cryptography]>=3.3",

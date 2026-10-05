@@ -4,9 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import api from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { useThemeStore } from "../store/theme";
+import AnswerFeedback from "../components/AnswerFeedback";
 
 interface Source { group: string; date: string }
-interface Message { role: "user" | "assistant"; text: string; sources?: Source[]; outOfScope?: boolean }
+interface Message { role: "user" | "assistant"; text: string; sources?: Source[]; outOfScope?: boolean; traceId?: string; feedbackToken?: string }
 interface Conversation { id: string; title: string; messages: Message[]; updatedAt: number }
 
 const MAX_CONVS = 5;
@@ -142,6 +143,8 @@ export default function ChatPage() {
         text: res.data.answer,
         sources: res.data.sources,
         outOfScope: res.data.out_of_scope,
+        traceId: res.data.trace_id,
+        feedbackToken: res.data.feedback_token,
       };
     } catch (err: any) {
       const detail = err.response?.data?.detail || "Bir hata oluştu.";
@@ -417,6 +420,7 @@ export default function ChatPage() {
                     </div>
                   )}
                 </div>
+                {msg.role === "assistant" && msg.traceId && msg.feedbackToken && <AnswerFeedback key={msg.traceId} traceId={msg.traceId} token={msg.feedbackToken} />}
               </div>
               {msg.role === "user" && (
                 <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex-shrink-0 flex items-center justify-center text-sm font-bold text-gray-700 dark:text-white mt-1">

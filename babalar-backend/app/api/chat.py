@@ -1,7 +1,9 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
+import asyncio
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +11,9 @@ from app.auth import get_current_user
 from app.database import get_db
 from app.models.models import Message, User, UserDailyUsage
 from app.services import rate_limiter, rag
+from app.config import settings
+from app.observability import langfuse
+from app.services.feedback import feedback_token, verify_feedback, feedback_score_id
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -56,7 +61,28 @@ async def ask(
             raise HTTPException(status_code=429, detail=reason)
 
     result = await rag.answer(db, req.question, [h.model_dump() for h in req.history], user_id=str(current_user.id))
+    if result.get("trace_id"):
+        result["feedback_token"] = feedback_token(result["trace_id"], str(current_user.id))
     return result
+
+
+class FeedbackRequest(BaseModel):
+    trace_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    feedback_token: str = Field(max_length=1024)
+    value: Literal[0, 1]
+
+
+@router.post("/feedback")
+async def submit_feedback(req: FeedbackRequest, current_user: User = Depends(get_current_user)):
+    if not settings.langfuse_enabled:
+        raise HTTPException(503, "Feedback is unavailable without Langfuse credentials")
+    user_id = str(current_user.id)
+    if not verify_feedback(req.feedback_token, req.trace_id, user_id):
+        raise HTTPException(403, "Feedback token is invalid or expired")
+    langfuse.create_score(name="user-thumbs", value=float(req.value), data_type="BOOLEAN",
+                          trace_id=req.trace_id, score_id=feedback_score_id(req.trace_id, user_id))
+    await asyncio.to_thread(langfuse.flush)
+    return {"ok": True, "value": req.value}
 
 
 @router.get("/categories")

@@ -5,7 +5,7 @@ asyncpg>=0.29
 pgvector>=0.3
 alembic>=1.13
 openai>=1.50
-langfuse>=4,<5
+langfuse==4.17.0
 typesafe-sdk==0.7.2
 openinference-instrumentation-typesafe==0.1.4
 python-jose[cryptography]>=3.3

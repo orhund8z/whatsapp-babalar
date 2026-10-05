@@ -1,4 +1,5 @@
 from app.config import settings  # noqa: F401  (sets LANGFUSE_TRACING_ENABLED before langfuse import)
+from app.observability import langfuse as _telemetry
 from langfuse.openai import AsyncOpenAI
 
 _client = AsyncOpenAI(api_key=settings.openai_api_key)

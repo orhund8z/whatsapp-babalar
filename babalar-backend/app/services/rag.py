@@ -12,6 +12,8 @@ from app.config import settings  # noqa: F401  (sets LANGFUSE_TRACING_ENABLED be
 from app.models.models import AdminConfig
 from app.services.decision import decide_answer, decide_question
 from app.services.embedding import embed
+from app.services.pii import first_name, scrub_text
+from app.services.quality import evidence_scores
 from langfuse import get_client, observe, propagate_attributes
 from langfuse.openai import AsyncOpenAI
 
@@ -145,9 +147,71 @@ async def _fetch_thread_context(db: AsyncSession, top_results: list) -> list:
     return thread_rows
 
 
+def _finish(answer_text, sources, *, found, top_similarity=0.0, retrieval_count=0, decision=None):
+    client = get_client()
+    output = {"answer": answer_text, "sources": sources, "found": bool(found),
+              "blocked": bool(decision and decision.block),
+              "decision_source": decision.source if decision else "none"}
+    client.update_current_span(output=output)
+    try:
+        for name, value, kind in [("found", float(bool(found)), "BOOLEAN"),
+                                  ("source_count", float(len(sources)), "NUMERIC"),
+                                  ("top_similarity", float(top_similarity), "NUMERIC"),
+                                  ("retrieval_count", float(retrieval_count), "NUMERIC"),
+                                  ("answer_blocked", float(output["blocked"]), "BOOLEAN"),
+                                  ("decision_source", output["decision_source"], "CATEGORICAL")]:
+            client.score_current_trace(name=name, value=value, data_type=kind)
+    except Exception:
+        pass
+    if settings.langfuse_enabled:
+        output["trace_id"] = client.get_current_trace_id()
+    return output
+
+
+@observe(name="answer-from-context", capture_input=False, capture_output=False)
+async def generate_answer(*, question, context, sources, history=None, search_query=None,
+                          top_similarity=0.0, retrieval_count=0):
+    """The same answer generation and decision path for live RAG and fixture evals."""
+    client = get_client()
+    client.update_current_span(input={"question": question, "context": context})
+    prompt = f"Community messages:\n\n{context}\n\nQuestion: {question}"
+    messages = [{"role": "system", "content": _SYSTEM}]
+    for h in (history or [])[-6:]:
+        if h.get("role") in ("user", "assistant"):
+            messages.append({"role": h["role"], "content": h["content"][:800]})
+    messages.append({"role": "user", "content": prompt})
+    for attempt in range(5):
+        try:
+            response = await _client.chat.completions.create(
+                model="gpt-4o-mini", max_tokens=1800, temperature=0,
+                response_format={"type": "json_object"}, messages=messages, name="generate-answer")
+            parsed = json.loads(response.choices[0].message.content)
+            found = bool(parsed.get("found", False))
+            answer_text = (parsed.get("answer") or "").strip()
+            if not found or not answer_text:
+                found = False
+                answer_text = "Bu konuda toplulukta yeterli bilgi bulamadım."
+            for name, value in evidence_scores(answer_text, context).items():
+                try:
+                    client.score_current_trace(name=name, value=value, data_type="NUMERIC")
+                except Exception:
+                    pass
+            decision = await decide_answer(question=question, search_query=search_query or question,
+                                           answer=answer_text, context=context, found=found, source_count=len(sources))
+            return _finish(decision.replacement_answer if decision.block else answer_text,
+                           [] if decision.block or not found else sources, found=found and not decision.block,
+                           top_similarity=top_similarity, retrieval_count=retrieval_count, decision=decision)
+        except RateLimitError as exc:
+            if "requests per day" in str(exc) or "RPD" in str(exc) or attempt == 4:
+                raise
+            await asyncio.sleep(2 ** attempt)
+
+
 @observe(name="rag-answer", capture_input=False, capture_output=False)
 async def answer(db: AsyncSession, question: str, history: list[dict] | None = None, user_id: str | None = None) -> dict:
-    history = history or []
+    # Nothing reaches OpenAI/Langfuse unscrubbed: user text here, stored messages when building the context below
+    question = scrub_text(question)
+    history = [{**h, "content": scrub_text(h.get("content") or "")} for h in (history or [])]
     langfuse = get_client()
     langfuse.update_current_span(input={"question": question, "history_turns": len(history)})
 
@@ -163,10 +227,8 @@ async def answer(db: AsyncSession, question: str, history: list[dict] | None = N
                     "decision_source": question_decision.source,
                 }
             )
-            return {
-                "answer": question_decision.replacement_answer or "Bu konuda yardımcı olamam.",
-                "sources": [],
-            }
+            return _finish(question_decision.replacement_answer or "Bu konuda yardımcı olamam.", [],
+                           found=False, decision=question_decision)
 
         normalized, search_query = await _preprocess(question, history)
 
@@ -174,7 +236,7 @@ async def answer(db: AsyncSession, question: str, history: list[dict] | None = N
         query_embedding = await embed(search_query)
 
         with langfuse.start_as_current_observation(
-            as_type="span",
+            as_type="retriever",
             name="pgvector-search",
             input={"search_query": search_query, "top_k": top_k},
         ) as search_span:
@@ -199,7 +261,7 @@ async def answer(db: AsyncSession, question: str, history: list[dict] | None = N
 
         if not results:
             langfuse.update_current_span(output={"found": False, "reason": "no_similarity_matches"})
-            return {"answer": "Bu konuda toplulukta yeterli bilgi bulamadım.", "sources": []}
+            return _finish("Bu konuda toplulukta yeterli bilgi bulamadım.", [], found=False)
 
         # Expand each top result with its conversation thread neighbors
         thread_neighbors = await _fetch_thread_context(db, results)
@@ -242,9 +304,9 @@ async def answer(db: AsyncSession, question: str, history: list[dict] | None = N
             header = f"=== {group_name} | {date_str} ==="
             lines = [header]
             for msg in cluster:
-                sender = "Anonim" if not msg.sender_name or _LID_RE.match(msg.sender_name) else msg.sender_name
+                sender = first_name(msg.sender_name) or "Anonim"
                 time_str = msg.sent_at.strftime("%H:%M")
-                lines.append(f"[{time_str} | {sender}] {msg.content}")
+                lines.append(f"[{time_str} | {sender}] {scrub_text(msg.content)}")
                 sim = result_sims.get(msg.id, 0.0)
                 if sim >= 0.52 and group_name not in seen_groups:
                     seen_groups[group_name] = date_str
@@ -252,64 +314,8 @@ async def answer(db: AsyncSession, question: str, history: list[dict] | None = N
 
         sources = [{"group": g, "date": d} for g, d in seen_groups.items()]
         context = "\n\n---\n\n".join(context_parts)
-        prompt = f"Community messages:\n\n{context}\n\nQuestion: {normalized}"
-
-        # Build messages with conversation history so the LLM has full context
-        messages: list[dict] = [{"role": "system", "content": _SYSTEM}]
-        for h in history[-6:]:  # last 3 exchanges
-            if h.get("role") in ("user", "assistant"):
-                messages.append({"role": h["role"], "content": h["content"][:800]})
-        messages.append({"role": "user", "content": prompt})
-
-        for attempt in range(5):
-            try:
-                response = await _client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    max_tokens=1800,
-                    temperature=0,
-                    response_format={"type": "json_object"},
-                    messages=messages,
-                    name="generate-answer",
-                )
-                raw = response.choices[0].message.content
-                parsed = json.loads(raw)
-                found = parsed.get("found", False)
-                answer_text = (parsed.get("answer") or "").strip()
-                # Model sometimes leaves "answer" blank when found=false instead of writing a message.
-                if not found or not answer_text:
-                    answer_text = "Bu konuda toplulukta yeterli bilgi bulamadım."
-
-                decision = await decide_answer(
-                    question=normalized,
-                    search_query=search_query,
-                    answer=answer_text,
-                    context=context,
-                    found=found,
-                    source_count=len(sources),
-                )
-                if decision.block:
-                    langfuse.update_current_span(
-                        output={
-                            "found": False,
-                            "source_count": 0,
-                            "decision": decision.reason,
-                            "decision_source": decision.source,
-                        }
-                    )
-                    return {"answer": decision.replacement_answer or "Bu konuda toplulukta yeterli bilgi bulamadım.", "sources": []}
-
-                langfuse.update_current_span(
-                    output={
-                        "found": found,
-                        "source_count": len(sources),
-                        "decision": decision.action,
-                        "decision_source": decision.source,
-                    }
-                )
-                return {"answer": answer_text, "sources": sources if found else []}  # reasoning is internal, not returned
-            except RateLimitError as e:
-                if "requests per day" in str(e) or "RPD" in str(e):
-                    raise
-                if attempt == 4:
-                    raise
-                await asyncio.sleep(2 ** attempt)
+        result = await generate_answer(question=normalized, context=context, sources=sources, history=history,
+                                       search_query=search_query, top_similarity=max(r.similarity for r in results),
+                                       retrieval_count=len(results))
+        langfuse.update_current_span(output={k: v for k, v in result.items() if k != "trace_id"})
+        return result
