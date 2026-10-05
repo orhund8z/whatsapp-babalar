@@ -14,6 +14,7 @@ from app.services.decision import decide_answer, decide_question
 from app.services.embedding import embed
 from app.services.pii import first_name, scrub_text
 from app.services.quality import evidence_scores
+from app.prompts import system_prompt
 from langfuse import get_client, observe, propagate_attributes
 from langfuse.openai import AsyncOpenAI
 
@@ -93,16 +94,18 @@ async def _preprocess(question: str, history: list[dict]) -> tuple[str, str]:
             )
             user_content = f"[Previous conversation]\n{history_text}\n\n[Current question]\n{question[:500]}"
 
+        system, prompt_ref = await system_prompt("babalar-query-preprocess", _PREPROCESS_SYSTEM)
         resp = await _client.chat.completions.create(
             model="gpt-4o-mini",
             max_tokens=300,
             temperature=0,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": _PREPROCESS_SYSTEM},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user_content},
             ],
             name="preprocess-query",
+            langfuse_prompt=prompt_ref,
         )
         parsed = json.loads(resp.choices[0].message.content)
         corrected = parsed.get("corrected", question).strip() or question
@@ -175,7 +178,8 @@ async def generate_answer(*, question, context, sources, history=None, search_qu
     client = get_client()
     client.update_current_span(input={"question": question, "context": context})
     prompt = f"Community messages:\n\n{context}\n\nQuestion: {question}"
-    messages = [{"role": "system", "content": _SYSTEM}]
+    system, prompt_ref = await system_prompt("babalar-rag-answer", _SYSTEM)
+    messages = [{"role": "system", "content": system}]
     for h in (history or [])[-6:]:
         if h.get("role") in ("user", "assistant"):
             messages.append({"role": h["role"], "content": h["content"][:800]})
@@ -184,7 +188,8 @@ async def generate_answer(*, question, context, sources, history=None, search_qu
         try:
             response = await _client.chat.completions.create(
                 model="gpt-4o-mini", max_tokens=1800, temperature=0,
-                response_format={"type": "json_object"}, messages=messages, name="generate-answer")
+                response_format={"type": "json_object"}, messages=messages, name="generate-answer",
+                langfuse_prompt=prompt_ref)
             parsed = json.loads(response.choices[0].message.content)
             found = bool(parsed.get("found", False))
             answer_text = (parsed.get("answer") or "").strip()

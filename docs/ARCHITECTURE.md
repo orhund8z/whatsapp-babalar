@@ -320,6 +320,13 @@ reaches the browser; feedback proofs expire after seven days and re-ratings reus
 one score ID. See [Langfuse Workshop](langfuse-workshop.md) for runnable commands,
 score definitions, and masking limitations.
 
+Preprocessing, answer generation, categorization, and the optional faithfulness
+judge fetch versioned system prompts from Langfuse (`production` by default;
+`LANGFUSE_PROMPT_LABEL=staging` for evaluation). Generations link to prompt versions.
+The SDK caches for 60 seconds; a bounded off-thread fetch falls back to local
+instructions when unavailable or invalid. Prompt edits need no code deployment.
+JEV retains its typed decision contract and thresholds in code.
+
 ## Ingestion Pipeline
 
 ```

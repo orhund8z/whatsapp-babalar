@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_base_url: str = "https://cloud.langfuse.com"  # EU region; use https://us.cloud.langfuse.com for US
+    langfuse_prompt_label: str = "production"
 
     typesafe_api_key: str | None = None
     jev_enabled: bool = True

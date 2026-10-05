@@ -4,6 +4,7 @@ import json
 from openai import RateLimitError
 from app.config import settings  # noqa: F401  (sets LANGFUSE_TRACING_ENABLED before langfuse import)
 from app.observability import langfuse as _telemetry
+from app.prompts import system_prompt
 from langfuse import get_client, observe
 from langfuse.openai import AsyncOpenAI
 
@@ -31,6 +32,7 @@ _SEM = asyncio.Semaphore(5)  # max 5 concurrent chunk calls
 async def _categorize_chunk(contents: list[str]) -> list[str]:
     numbered = "\n".join(f"{i+1}. {c[:500]}" for i, c in enumerate(contents))
     async with _SEM:
+        system, prompt_ref = await system_prompt("babalar-categorizer", _SYSTEM)
         for attempt in range(4):
             try:
                 response = await _client.chat.completions.create(
@@ -38,9 +40,11 @@ async def _categorize_chunk(contents: list[str]) -> list[str]:
                     max_tokens=200,
                     temperature=0,
                     messages=[
-                        {"role": "system", "content": _SYSTEM},
+                        {"role": "system", "content": system},
                         {"role": "user", "content": numbered},
                     ],
+                    name="categorize-messages",
+                    langfuse_prompt=prompt_ref,
                 )
                 raw = response.choices[0].message.content.strip()
                 parsed = json.loads(raw)

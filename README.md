@@ -183,6 +183,10 @@ Chat answers also record result/retrieval scores and support authenticated thumb
 feedback. The [workshop guide](docs/langfuse-workshop.md) covers the 40-case synthetic
 dataset, experiments, code graders, and optional LLM judge.
 
+The four GPT system prompts are also managed in Langfuse with `production` and
+`staging` labels, generation-to-version links, caching, and local outage fallbacks.
+See the workshop guide for prompt editing, evaluation, and rollback.
+
 ---
 
 ## AWS Deploy

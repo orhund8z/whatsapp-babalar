@@ -101,7 +101,36 @@ questions, history, and retrieved message text before model calls.
 Feedback uses an authenticated endpoint and a seven-day signed token bound to the
 user and trace. Re-rating updates one stable score ID rather than creating repeated
 votes. No Langfuse secret is sent to the browser. Tracing remains disabled when keys
-are absent. Prompt management and a CI quality gate remain separate follow-up work.
+are absent. A CI quality gate remains separate follow-up work.
+
+## Managed Prompts
+
+Four existing system prompts are now versioned in Langfuse as text prompts:
+`babalar-query-preprocess`, `babalar-rag-answer`, `babalar-categorizer`, and
+`babalar-faithfulness-judge`. Version 1 preserves the original instructions and
+has both `production` and `staging` labels. Each OpenAI generation links to the
+actual fetched prompt version. Model parameters, user messages/history, and
+JEV's typed decision questions/thresholds remain in code.
+
+```bash
+cd babalar-backend
+python -m app.prompts seed
+LANGFUSE_PROMPT_LABEL=staging python -m app.evaluation run --limit 8 --llm-judge
+```
+
+Seeding requires Node/npx for the Langfuse CLI and preserves prompts that already
+exist; it never replaces workshop edits. Runtime fetching only uses the Python
+SDK. Live traffic defaults to `LANGFUSE_PROMPT_LABEL=production`. Save edits as a
+new version with `staging`, evaluate, then move `production` to the tested version.
+Rollback means moving `production` back. The SDK cache lasts 60 seconds and may
+serve a stale version during background refresh, so updates are not instantaneous.
+Model/config settings displayed in Langfuse are informational; model calls still
+use code-defined parameters.
+
+Fetches run outside the async event loop with a two-second timeout and no retries.
+Missing credentials, unavailable prompts, malformed/blank templates, and unresolved
+variables use the local original instructions. These system prompts currently have
+no template variables. Fallback generations are not linked to a fake prompt version.
 
 References: [Experiments SDK](https://langfuse.com/docs/evaluation/experiments/experiments-via-sdk),
 [Masking](https://langfuse.com/docs/observability/features/masking),
