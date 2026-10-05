@@ -79,6 +79,7 @@ flowchart TB
 ### CloudFront
 - **Default behavior** (`/*`): S3 origin — serves React frontend, caching enabled
 - **API behavior** (`/api/*`): ALB origin — proxies to backend, caching disabled, all headers forwarded
+- SPA paths are rewritten to `/index.html` by a viewer-request function on the S3 behavior only; API errors retain their HTTP status and JSON body.
 - SSL: ACM certificate (us-east-1, required by CloudFront)
 - Geo-restriction: DE only
 - Price Class 100 (US + EU edges)
@@ -290,9 +291,7 @@ Configured Langfuse score schemas:
 
 ---
 
-## Ingestion Pipeline
-
-### Langfuse Evaluation Workflow
+## Langfuse Evaluation Workflow
 
 Live RAG records trace-level `found`, `source_count`, `retrieval_count`,
 `top_similarity`, `answer_blocked`, and `decision_source`. Literal URL/number
@@ -320,6 +319,8 @@ sender context labels from both SDK and external OTel spans. No Langfuse secret
 reaches the browser; feedback proofs expire after seven days and re-ratings reuse
 one score ID. See [Langfuse Workshop](langfuse-workshop.md) for runnable commands,
 score definitions, and masking limitations.
+
+## Ingestion Pipeline
 
 ```
 Nightly 02:00 UTC (node-cron)
