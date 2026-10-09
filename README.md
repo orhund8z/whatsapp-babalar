@@ -30,9 +30,16 @@ flowchart LR
 
 ### Deployment Status
 
-AWS teardown was requested on **2026-10-09** and is in progress to stop ongoing
-application infrastructure costs. The former `babalar.ocloudy.com` endpoints
-should not be used. Local development and the deployment templates remain available.
+AWS application teardown completed on **2026-10-09**. The frontend, compute,
+database, and network stacks are deleted, together with app-owned snapshots/backups,
+volumes, secrets, logs, and 52 deployment artifact keys (including old versions).
+Temporary cleanup stacks were also removed. The former `babalar.ocloudy.com`
+endpoints are offline. Local development and the deployment templates remain available.
+
+Shared CDK bootstrap infrastructure and unrelated AWS resources were preserved;
+their costs and previously accrued charges are not canceled by this teardown.
+The deleted database, messages/users, and AWS backups are not recoverable from
+this deployment.
 
 Current AI tooling includes trace/result scores, authenticated thumbs feedback,
 40 synthetic Turkish evaluation cases, code-based evidence checks, an optional

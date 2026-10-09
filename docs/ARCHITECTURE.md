@@ -7,9 +7,11 @@
 **Domain**: `babalar.ocloudy.com`  
 **Access**: Germany only (CloudFront geo-restriction)
 
-**Deployment status (2026-10-09)**: AWS teardown is in progress. The diagrams
-describe the deployable design, not a currently available service. See the README
-for the teardown status and cost boundaries.
+**Deployment status (2026-10-09)**: AWS application teardown is complete. The
+frontend, compute, database, and network stacks and app-owned billable residuals
+have been removed. The diagrams describe the deployable design, not an active
+service. Shared bootstrap infrastructure and unrelated resources remain; see the
+README for cost boundaries.
 
 ---
 
