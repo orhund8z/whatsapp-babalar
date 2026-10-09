@@ -4,6 +4,8 @@ A RAG-based chatbot that indexes WhatsApp group conversations, stores them in a 
 
 ## Architecture
 
+This is the deployable topology; it does not imply an active AWS deployment.
+
 ```mermaid
 flowchart LR
     U[User] --> CF[CloudFront<br/>babalar.ocloudy.com]
@@ -24,14 +26,19 @@ flowchart LR
 - **Decision Layer** — TypeSafe JEV for groundedness, PII, scope, and show/reject decisions
 - **Infra** — AWS (EC2, RDS PostgreSQL 16, CloudFront + S3), CDK (Python)
 - **Observability** — Langfuse traces and scores (`answer_grounded`, `pii_risk`, `out_of_scope`, `answer_action`)
+- **Privacy** — Pattern-based contact/identifier scrubbing before ingestion/import processing, plus Langfuse export masking; not exhaustive PII detection
 
-### Live Production
+### Deployment Status
 
-| Endpoint | Status |
-|----------|--------|
-| https://babalar.ocloudy.com | CloudFront + S3 frontend |
-| https://babalar.ocloudy.com/api/health | Backend health via CloudFront |
-| Current deployed backend version | `20261004.3373b40` |
+AWS teardown was requested on **2026-10-09** and is in progress to stop ongoing
+application infrastructure costs. The former `babalar.ocloudy.com` endpoints
+should not be used. Local development and the deployment templates remain available.
+
+Current AI tooling includes trace/result scores, authenticated thumbs feedback,
+40 synthetic Turkish evaluation cases, code-based evidence checks, an optional
+LLM judge, and versioned Langfuse system prompts with production/staging labels.
+JEV has been verified with supported and unsupported answer cases. See
+[Langfuse Workshop](docs/langfuse-workshop.md) for commands and limitations.
 
 ---
 
@@ -226,17 +233,34 @@ cp deploy.config.example deploy.config
 # BUILD_VERSION=$(git log -1 --format="%cd.%h" --date=format:"%Y%m%d") docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-### AWS Infrastructure
+### AWS Infrastructure (When Deployed)
 
-| Resource | Type | Cost |
+| Resource | Type | Billing Driver |
 |----------|------|------|
-| EC2 t4g.small (Graviton2) | Backend + ingestion | ~$15/mo |
-| RDS t4g.micro PostgreSQL 16 | pgvector, private subnet | ~$13/mo |
-| ALB | Routes CloudFront → EC2 (HTTP only, not public) | ~$18/mo |
-| CloudFront + S3 | Single entry point: frontend + `/api/*` proxy, Germany geo-restriction | ~$1/mo |
-| Secrets Manager | API keys, DB password | ~$2/mo |
+| EC2 t4g.small (Graviton2) | Backend + ingestion | Instance hours, EBS, public IPv4 |
+| RDS t4g.micro PostgreSQL 16 | pgvector, private subnet | Instance hours, storage, retained backups/snapshots |
+| ALB | Routes CloudFront → EC2 (HTTP only, not public) | Load balancer hours and capacity |
+| CloudFront + S3 | Frontend + API proxy, Germany geo-restriction | Requests, transfer, object storage |
+| Secrets Manager | API keys, DB password | Stored secrets and API requests |
 
 EC2 access is via **AWS SSM Session Manager** — no SSH, no open port 22.
+
+### Teardown Notes
+
+Stopping containers or EC2 is not a full undeploy. The database template defaults
+to deletion protection and `RETAIN`; those settings must be explicitly handled
+before removing the stacks. Delete compute/frontend first, then the database and
+network. Keep the database password secret until database deletion completes:
+CloudFormation resolves its dynamic reference even during deletion. Then audit
+retained snapshots, backups, volumes, secrets, log groups, and
+app-specific deployment assets. Removing the database and snapshots is irreversible.
+Do not remove unrelated resources or shared CDK bootstrap infrastructure.
+Shared bootstrap storage and unrelated account resources can still incur costs;
+an app teardown is not a guarantee of a zero AWS account bill.
+
+Langfuse Cloud and external API accounts are separate from AWS. Undeploying this
+service stops its scheduled ingestion/model calls but does not cancel those accounts
+or erase previously accumulated charges.
 
 ---
 
